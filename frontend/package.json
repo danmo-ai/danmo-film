@@ -1,0 +1,32 @@
+{
+  "name": "danmo-film-frontend",
+  "private": true,
+  "version": "4.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:fresh": "rm -rf node_modules/.vite && vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "canvas-unit": "npx --yes tsx src/utils/canvasEdges.unit.ts && npx --yes tsx src/utils/canvasExtendPreview.unit.ts && npx --yes tsx src/utils/canvasStaging.unit.ts && npx --yes tsx src/utils/registryParamSchema.unit.ts && npx --yes tsx src/utils/genTaskLog.unit.ts && npx --yes tsx src/utils/longVideoCast.unit.ts"
+  },
+  "dependencies": {
+    "@danqing/dq-shell": "file:../dq-ui/packages/shell",
+    "@danqing/dq-tokens": "file:../dq-ui/packages/tokens",
+    "@danqing/dq-ui": "file:../dq-ui/packages/ui",
+    "@tauri-apps/api": "^2.11.1",
+    "axios": "^1.7.2",
+    "pinia": "^2.1.7",
+    "reka-ui": "^2.9.7",
+    "vue": "^3.4.27",
+    "vue-i18n": "^9.13.1",
+    "vue-router": "^4.3.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.5",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.12",
+    "vue-tsc": "^2.0.19"
+  }
+}
