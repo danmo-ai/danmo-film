@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.api.routes import long_video_projects, providers, script_parse
+from backend.api.routes import assets, generation, long_video_projects, providers, script_parse
 from backend.runtime_paths import user_data_dir, workspace_dir
 
 
@@ -36,6 +36,8 @@ def create_app() -> FastAPI:
     app.include_router(long_video_projects.router)
     app.include_router(script_parse.router)
     app.include_router(providers.router)
+    app.include_router(assets.router)
+    app.include_router(generation.router)
 
     dist = Path(__file__).resolve().parents[1] / "out" / "frontend" / "dist"
     if dist.is_dir():

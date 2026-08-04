@@ -1,12 +1,8 @@
 # Danmo Film
 
-Long-form video workbench for the Danmo suite: script → storyboard → timeline → segment generation.
+Long-form video workbench for the Danmo suite: script → storyboard → timeline → segment generation → assemble.
 
-Danmo **Make** remains the local generation engine (image / video / audio). Film orchestrates narrative production and calls:
-
-- **Danmo Make API** (default `http://127.0.0.1:7800`) for generation / assets / tasks
-- **Cloud vendor APIs** via `backend/providers/cloud/` (stubs today — fail loud until implemented)
-- **Assemble** — `POST /api/long-video/assemble` stitches Make segment assets (no Make long-video API)
+**Providers are peers.** Danmo Make and cloud vendors supply LLM / image / short-clip APIs the same way. Film downloads results, stores them in its own asset library (`fas_*`), then merges and manages media locally. Finals are **not** uploaded back to Make.
 
 ## Dev ports
 
@@ -29,7 +25,7 @@ make backend
 make frontend
 ```
 
-Optional: point LLM/script-parse at Make’s OpenAI-compatible chat:
+Optional: point generation / LLM at Make (or any OpenAI-compatible base):
 
 ```bash
 export FILM_MAKE_BASE_URL=http://127.0.0.1:7800
@@ -41,7 +37,8 @@ Settings file: `~/.danmo-film/config/settings.json`.
 
 ## Layout
 
-- `backend/film/` — domain helpers (timing, parse quality, activity)
+- `backend/film/` — domain helpers (timing, parse quality, stitch)
 - `backend/llm/` — script-parse / storyboard LLM pipeline
-- `backend/providers/` — Make + cloud generation / LLM adapters
+- `backend/providers/` — Make + cloud generation / LLM adapters (peers)
+- `backend/persistence/film_asset_store.py` — Film asset SoR
 - `frontend/` — Film UI (long-video studio)

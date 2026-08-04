@@ -1,4 +1,4 @@
-"""Concatenate segment MP4s with ffmpeg (Film-owned assemble; Make has no long-video API)."""
+"""Concatenate segment MP4s with ffmpeg (Film-owned assemble)."""
 
 from __future__ import annotations
 

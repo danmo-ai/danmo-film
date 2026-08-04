@@ -9,11 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.api.deps import (
+    get_film_asset_store,
     get_generation_provider,
     get_long_video_activity_store,
     get_long_video_project_store,
 )
 from backend.core.contracts import LongVideoProjectActivityDTO, LongVideoProjectActivityListResponse
+from backend.persistence.film_asset_store import FilmAssetStore
 from backend.persistence.long_video_activity_store import LongVideoActivityStore
 from backend.persistence.long_video_project_store import LongVideoProjectStore
 from backend.providers.base import GenerationProvider
@@ -143,13 +145,13 @@ async def get_long_video_parse_run(
 async def scene_grounding_depth_from_asset(
     body: SceneGroundingDepthRequest,
 ):
-    """Depth-pro encoding lives on Danmo Make — Film fails loud until a remote proxy exists."""
+    """Depth-pro is a provider capability — Film does not host it yet."""
     _ = body
     raise HTTPException(
         status_code=501,
         detail=(
-            "Scene-grounding depth encoding is not hosted in Danmo Film. "
-            "Use Danmo Make depth tooling / provide an existing depth asset_id."
+            "Scene-grounding depth encoding is not hosted in Danmo Film yet. "
+            "Run depth on a generation provider and ingest the result into Film assets."
         ),
     )
 
@@ -165,12 +167,14 @@ class AssembleRequest(BaseModel):
 async def assemble_segments(
     body: AssembleRequest,
     gen: GenerationProvider = Depends(get_generation_provider),
+    store: FilmAssetStore = Depends(get_film_asset_store),
 ):
-    """Stitch pre-generated segment videos (assets on Make) into one final video asset."""
+    """Stitch segment videos into one Film-owned final asset (no provider upload-back)."""
     import tempfile
     from datetime import datetime
 
     from backend.film.stitch import stitch_segment_paths
+    from backend.providers.ingest import materialize_segment_path
 
     ids = [str(x).strip() for x in (body.segment_asset_ids or []) if str(x).strip()]
     if not ids:
@@ -181,7 +185,7 @@ async def assemble_segments(
             paths: list[Path] = []
             for i, aid in enumerate(ids):
                 dest = tmp_path / f"seg_{i:03d}.mp4"
-                gen.download_asset_file(aid, dest)
+                materialize_segment_path(aid, dest=dest, gen=gen, store=store)
                 paths.append(dest)
             out = tmp_path / f"assembled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             stitch_segment_paths(
@@ -190,11 +194,22 @@ async def assemble_segments(
                 overlap_frames=int(body.overlap_frames or 0),
                 fps=float(body.fps or 16),
             )
-            uploaded = gen.upload_asset_file(out, mime_type="video/mp4")
+            row = store.create_from_file(
+                out,
+                kind="video",
+                mime_type="video/mp4",
+                source_provider="film-assemble",
+                metadata={
+                    "title": body.title,
+                    "segment_count": len(ids),
+                    "segment_asset_ids": ids,
+                },
+            )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    asset_id = uploaded.get("id") or uploaded.get("asset_id")
-    if not asset_id:
-        raise HTTPException(status_code=502, detail=f"unexpected upload payload: {uploaded!r}")
-    return {"asset_id": str(asset_id), "title": body.title, "segment_count": len(ids)}
+    return {
+        "asset_id": str(row["id"]),
+        "title": body.title,
+        "segment_count": len(ids),
+    }
 

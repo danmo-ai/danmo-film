@@ -5,11 +5,12 @@ from __future__ import annotations
 from functools import lru_cache
 
 from backend.llm.service import LLMService
+from backend.persistence.film_asset_store import FilmAssetStore
 from backend.persistence.long_video_activity_store import LongVideoActivityStore
 from backend.persistence.long_video_project_store import LongVideoProjectStore
 from backend.providers.base import GenerationProvider, LlmChatProvider
 from backend.providers.resolve import resolve_generation_provider, resolve_llm_provider
-from backend.runtime_paths import film_db_path
+from backend.runtime_paths import film_assets_root, film_db_path
 
 
 @lru_cache(maxsize=1)
@@ -20,6 +21,11 @@ def get_long_video_project_store() -> LongVideoProjectStore:
 @lru_cache(maxsize=1)
 def get_long_video_activity_store() -> LongVideoActivityStore:
     return LongVideoActivityStore(film_db_path())
+
+
+@lru_cache(maxsize=1)
+def get_film_asset_store() -> FilmAssetStore:
+    return FilmAssetStore(film_db_path(), film_assets_root())
 
 
 @lru_cache(maxsize=1)

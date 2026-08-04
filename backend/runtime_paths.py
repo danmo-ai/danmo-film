@@ -26,3 +26,9 @@ def film_db_path() -> Path:
     path = workspace_dir() / "film.db"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def film_assets_root() -> Path:
+    path = workspace_dir() / "assets"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

@@ -1,9 +1,14 @@
-"""Generation / LLM provider contracts for Danmo Film."""
+"""Generation / LLM provider contracts for Danmo Film.
+
+Providers are peers (Make local API, cloud vendors): submit jobs, poll tasks,
+download result bytes. Film owns assets — providers are not Film's gallery.
+"""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from pathlib import Path
+from typing import Any, Iterator
 
 
 class GenerationProvider(ABC):
@@ -18,6 +23,12 @@ class GenerationProvider(ABC):
     @abstractmethod
     def list_models(self, *, media: str | None = None) -> list[dict[str, Any]]:
         ...
+
+    def get_registry(self) -> dict[str, Any]:
+        raise RuntimeError(f"{self.provider_id} does not expose a model registry")
+
+    def list_adapters(self, *, for_model: str | None = None) -> Any:
+        raise RuntimeError(f"{self.provider_id} does not list adapters")
 
     @abstractmethod
     def create_image(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -35,11 +46,17 @@ class GenerationProvider(ABC):
     def get_task(self, task_id: str) -> dict[str, Any]:
         ...
 
-    def download_asset_file(self, asset_id: str, dest: Path) -> Path:
-        raise RuntimeError(f"{self.provider_id} does not support download_asset_file")
+    def download_result(self, provider_asset_id: str, dest: Path) -> Path:
+        """Download a provider-native result asset onto ``dest``."""
+        raise RuntimeError(f"{self.provider_id} does not support download_result")
 
-    def upload_asset_file(self, path: Path, *, mime_type: str = "video/mp4") -> dict[str, Any]:
-        raise RuntimeError(f"{self.provider_id} does not support upload_asset_file")
+    def stage_input_file(self, path: Path, *, mime_type: str = "application/octet-stream") -> dict[str, Any]:
+        """Ephemeral upload of a Film-owned file as a job input (not Film SoR)."""
+        raise RuntimeError(f"{self.provider_id} does not support stage_input_file")
+
+    def iter_task_sse(self, task_id: str) -> Iterator[tuple[str, str]]:
+        """Yield ``(event_name, data_json_str)`` for task SSE. Optional."""
+        raise RuntimeError(f"{self.provider_id} does not support iter_task_sse")
 
 
 class LlmChatProvider(ABC):

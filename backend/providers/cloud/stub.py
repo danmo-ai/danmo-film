@@ -30,6 +30,14 @@ class CloudGenerationProvider(GenerationProvider):
         self._unsupported("list_models")
         return []
 
+    def get_registry(self) -> dict[str, Any]:
+        self._unsupported("get_registry")
+        return {}
+
+    def list_adapters(self, *, for_model: str | None = None) -> Any:
+        self._unsupported("list_adapters")
+        return {}
+
     def create_image(self, body: dict[str, Any]) -> dict[str, Any]:
         self._unsupported("create_image")
         return {}

@@ -1,9 +1,13 @@
-"""Danmo Make HTTP generation provider."""
+"""Danmo Make HTTP generation provider — peer API, same role as a cloud vendor.
+
+Make supplies clip generation + ephemeral job-input staging. Film never treats
+Make's asset store as the system of record for Film projects or finals.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -50,6 +54,24 @@ class MakeGenerationProvider(GenerationProvider):
             return list(data["models"])
         raise RuntimeError(f"unexpected /api/models payload from Make: {type(data).__name__}")
 
+    def get_registry(self) -> dict[str, Any]:
+        with self._client() as client:
+            r = client.get("/api/registry")
+            r.raise_for_status()
+            data = r.json()
+        if not isinstance(data, dict):
+            raise RuntimeError(f"unexpected /api/registry payload from Make: {type(data).__name__}")
+        return data
+
+    def list_adapters(self, *, for_model: str | None = None) -> Any:
+        params = {}
+        if for_model:
+            params["for_model"] = for_model
+        with self._client() as client:
+            r = client.get("/api/adapters", params=params)
+            r.raise_for_status()
+            return r.json()
+
     def create_image(self, body: dict[str, Any]) -> dict[str, Any]:
         with self._client() as client:
             r = client.post("/api/images/generations", json=body)
@@ -74,24 +96,21 @@ class MakeGenerationProvider(GenerationProvider):
             r.raise_for_status()
             return r.json()
 
-    def download_asset_file(self, asset_id: str, dest: Path) -> Path:
-        from pathlib import Path as _Path
-
-        dest = _Path(dest)
+    def download_result(self, provider_asset_id: str, dest: Path) -> Path:
+        dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         with self._client() as client:
-            r = client.get(f"/api/assets/{asset_id}/file")
+            r = client.get(f"/api/assets/{provider_asset_id}/file")
             if r.status_code >= 400:
-                raise RuntimeError(f"Make asset download failed ({r.status_code}): {r.text[:300]}")
+                raise RuntimeError(f"Make result download failed ({r.status_code}): {r.text[:300]}")
             dest.write_bytes(r.content)
         return dest
 
-    def upload_asset_file(self, path: Path, *, mime_type: str = "video/mp4") -> dict[str, Any]:
-        from pathlib import Path as _Path
-
-        path = _Path(path)
+    def stage_input_file(self, path: Path, *, mime_type: str = "application/octet-stream") -> dict[str, Any]:
+        """Ephemeral Make upload so a job can reference the file — not Film ownership transfer."""
+        path = Path(path)
         if not path.is_file():
-            raise RuntimeError(f"upload path missing: {path}")
+            raise RuntimeError(f"stage path missing: {path}")
         with self._client() as client:
             with path.open("rb") as fh:
                 r = client.post(
@@ -99,5 +118,32 @@ class MakeGenerationProvider(GenerationProvider):
                     files={"file": (path.name, fh, mime_type)},
                 )
             if r.status_code >= 400:
-                raise RuntimeError(f"Make asset upload failed ({r.status_code}): {r.text[:300]}")
+                raise RuntimeError(f"Make stage_input_file failed ({r.status_code}): {r.text[:300]}")
             return r.json()
+
+    def iter_task_sse(self, task_id: str) -> Iterator[tuple[str, str]]:
+        """Proxy Make task SSE as ``(event, data)`` pairs."""
+        url = f"{self._base}/api/tasks/{task_id}/stream"
+        with httpx.Client(headers=self._headers(), timeout=None) as client:
+            with client.stream("GET", url) as resp:
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"Make task stream failed ({resp.status_code})")
+                event = "message"
+                data_lines: list[str] = []
+                for raw in resp.iter_lines():
+                    line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("event:"):
+                        event = line[6:].strip() or "message"
+                        continue
+                    if line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip())
+                        continue
+                    if line == "":
+                        if data_lines:
+                            yield event, "\n".join(data_lines)
+                        event = "message"
+                        data_lines = []
+                if data_lines:
+                    yield event, "\n".join(data_lines)
