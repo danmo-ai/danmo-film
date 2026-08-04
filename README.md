@@ -6,6 +6,7 @@ Danmo **Make** remains the local generation engine (image / video / audio). Film
 
 - **Danmo Make API** (default `http://127.0.0.1:7800`) for generation / assets / tasks
 - **Cloud vendor APIs** via `backend/providers/cloud/` (stubs today — fail loud until implemented)
+- **Assemble** — `POST /api/long-video/assemble` stitches Make segment assets (no Make long-video API)
 
 ## Dev ports
 

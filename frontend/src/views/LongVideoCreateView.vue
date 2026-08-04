@@ -3044,47 +3044,26 @@ async function mergeLongVideo() {
 
   generating.value = true;
   try {
-    const meta = withProjectMetadata({
-      source: 'long_video_create',
-      long_video_phase: 'assemble_only',
-    });
-    const prompt = lv.shots[0]?.visual_prompt?.trim() || 'long video';
-    const { width, height } = outputSizePixels.value;
-    const segModel = lv.segment_video_model;
+    const missing = lv.shots.filter((s) => !String(s.segment_asset_id || '').trim());
+    if (missing.length) {
+      throw new Error($tt('video.longVideoNeedSegments') || 'Every shot needs a segment video before assemble');
+    }
     const p = segmentComposeParams;
-    const longBody: Record<string, unknown> = {
-      model: segModel,
+    const res = await api.longVideo.assembleSegments({
+      segment_asset_ids: lv.shots.map((s) => String(s.segment_asset_id)),
+      overlap_frames: lv.overlap_frames,
+      fps: p.fps || scalarDefault(lv.segment_video_model, 'fps', 16),
       title: projectTitle.value.trim(),
-      prompt,
-      negative_prompt: p.negative_prompt || '',
-      size: `${width}x${height}`,
-      fps: p.fps || scalarDefault(segModel, 'fps', 16),
-      steps: p.steps || scalarDefault(segModel, 'steps', 40),
-      guidance: p.guide_scale ?? scalarDefault(segModel, 'guide_scale', 3.0),
-      shift: p.shift || scalarDefault(segModel, 'shift', 12.0) || undefined,
-      seed: p.seed ? parseInt(p.seed, 10) : null,
-      metadata: meta,
-      priority: 'normal',
-      long_video: {
-        strategy: 'segmented_i2v',
-        target_duration_sec: effectiveTargetDurationSec(lv),
-        keyframe_model: lv.keyframe_model,
-        segment_video_model: lv.segment_video_model,
-        segment_duration_sec: Math.max(...lv.shots.map((s) => shotDurationSec(s)), 5),
-        overlap_frames: lv.overlap_frames,
-        chain_mode: lv.chain_mode,
-        character_lora_id: lv.character_lora_id || undefined,
-        keyframe_adapters: buildSegmentAdapters(),
-        shots: lv.shots.map((s) => ({ ...s, duration_sec: shotDurationSec(s) })),
-      },
-    };
-    const submitRes = await api.gen.createVideoLongGeneration(longBody);
-    await runGenerationTask(submitRes);
-    openGlobalTaskQueue();
+    });
+    const assetId = String(res.asset_id || '');
+    if (!assetId) throw new Error('assemble returned no asset_id');
+    longVideoProject.patchProject({ final_asset_id: assetId });
+    toast.success($tt('video.longVideoAssembleDone') || 'Assembled final video');
   } catch (e: unknown) {
-    generating.value = false;
     const msg = e instanceof Error ? e.message : String(e);
     toast.error($tt('studio.error', { msg }));
+  } finally {
+    generating.value = false;
   }
 }
 

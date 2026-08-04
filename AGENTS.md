@@ -39,5 +39,5 @@ make health
 
 1. Fail loud — no silent provider fallbacks.
 2. Do not import Make `backend/engine/families/*` into Film hot paths; use HTTP providers.
-3. Generation contracts for `/api/videos/long-generations` stay on Make; Film is a client.
+3. Make exposes only standard `/api/images/*` and `/api/videos/{generations,edits,...}` clip APIs; Film owns assemble (`POST /api/long-video/assemble`).
 4. Product name: **Danmo Film** / `danmo-film-*`.

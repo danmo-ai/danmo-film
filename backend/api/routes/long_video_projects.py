@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.api.deps import get_long_video_activity_store, get_long_video_project_store
+from backend.api.deps import (
+    get_generation_provider,
+    get_long_video_activity_store,
+    get_long_video_project_store,
+)
 from backend.core.contracts import LongVideoProjectActivityDTO, LongVideoProjectActivityListResponse
 from backend.persistence.long_video_activity_store import LongVideoActivityStore
 from backend.persistence.long_video_project_store import LongVideoProjectStore
+from backend.providers.base import GenerationProvider
 
 router = APIRouter(prefix="/api/long-video", tags=["long-video"])
 
@@ -146,3 +152,49 @@ async def scene_grounding_depth_from_asset(
             "Use Danmo Make depth tooling / provide an existing depth asset_id."
         ),
     )
+
+
+class AssembleRequest(BaseModel):
+    segment_asset_ids: list[str]
+    overlap_frames: int = 0
+    fps: float = 16.0
+    title: str = ""
+
+
+@router.post("/assemble")
+async def assemble_segments(
+    body: AssembleRequest,
+    gen: GenerationProvider = Depends(get_generation_provider),
+):
+    """Stitch pre-generated segment videos (assets on Make) into one final video asset."""
+    import tempfile
+    from datetime import datetime
+
+    from backend.film.stitch import stitch_segment_paths
+
+    ids = [str(x).strip() for x in (body.segment_asset_ids or []) if str(x).strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="segment_asset_ids is required")
+    try:
+        with tempfile.TemporaryDirectory(prefix="film_assemble_") as tmp:
+            tmp_path = Path(tmp)
+            paths: list[Path] = []
+            for i, aid in enumerate(ids):
+                dest = tmp_path / f"seg_{i:03d}.mp4"
+                gen.download_asset_file(aid, dest)
+                paths.append(dest)
+            out = tmp_path / f"assembled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+            stitch_segment_paths(
+                paths,
+                output=out,
+                overlap_frames=int(body.overlap_frames or 0),
+                fps=float(body.fps or 16),
+            )
+            uploaded = gen.upload_asset_file(out, mime_type="video/mp4")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    asset_id = uploaded.get("id") or uploaded.get("asset_id")
+    if not asset_id:
+        raise HTTPException(status_code=502, detail=f"unexpected upload payload: {uploaded!r}")
+    return {"asset_id": str(asset_id), "title": body.title, "segment_count": len(ids)}
+

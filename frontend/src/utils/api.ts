@@ -760,11 +760,6 @@ export const api = {
       return response.data;
     },
 
-    async createVideoLongGeneration(body: Record<string, unknown>): Promise<unknown> {
-      const response = await client.post('/api/videos/long-generations', body);
-      return response.data;
-    },
-
     async createVideoEdit(body: Record<string, unknown>): Promise<unknown> {
       const response = await client.post('/api/videos/edits', body);
       return response.data;
@@ -1168,6 +1163,17 @@ export const api = {
   },
 
   longVideo: {
+    async assembleSegments(body: {
+      segment_asset_ids: string[];
+      overlap_frames?: number;
+      fps?: number;
+      title?: string;
+    }): Promise<{ asset_id: string; title?: string; segment_count?: number }> {
+      const response = await client.post('/api/long-video/assemble', body, {
+        timeout: 600_000,
+      });
+      return response.data;
+    },
     async listProjects(limit = 100): Promise<LongVideoProjectSummary[]> {
       const response = await client.get('/api/long-video/projects', { params: { limit } });
       return (response.data?.items || []) as LongVideoProjectSummary[];

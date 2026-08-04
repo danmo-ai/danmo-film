@@ -68,14 +68,6 @@ def proxy_video_edit(req: ProxyBody, gen: GenerationProvider = Depends(get_gener
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.post("/proxy/videos/long-generations")
-def proxy_video_long(req: ProxyBody, gen: GenerationProvider = Depends(get_generation_provider)):
-    try:
-        return gen.long_generate_video(req.body)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
 @router.get("/proxy/tasks/{task_id}")
 def proxy_task(task_id: str, gen: GenerationProvider = Depends(get_generation_provider)):
     try:

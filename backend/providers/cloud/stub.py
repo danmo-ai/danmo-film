@@ -42,10 +42,6 @@ class CloudGenerationProvider(GenerationProvider):
         self._unsupported("edit_video")
         return {}
 
-    def long_generate_video(self, body: dict[str, Any]) -> dict[str, Any]:
-        self._unsupported("long_generate_video")
-        return {}
-
     def get_task(self, task_id: str) -> dict[str, Any]:
         self._unsupported("get_task")
         return {}

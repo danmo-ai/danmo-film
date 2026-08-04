@@ -32,12 +32,14 @@ class GenerationProvider(ABC):
         ...
 
     @abstractmethod
-    def long_generate_video(self, body: dict[str, Any]) -> dict[str, Any]:
-        ...
-
-    @abstractmethod
     def get_task(self, task_id: str) -> dict[str, Any]:
         ...
+
+    def download_asset_file(self, asset_id: str, dest: Path) -> Path:
+        raise RuntimeError(f"{self.provider_id} does not support download_asset_file")
+
+    def upload_asset_file(self, path: Path, *, mime_type: str = "video/mp4") -> dict[str, Any]:
+        raise RuntimeError(f"{self.provider_id} does not support upload_asset_file")
 
 
 class LlmChatProvider(ABC):
