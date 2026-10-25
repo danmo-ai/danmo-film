@@ -4,7 +4,7 @@
       type="primary"
       size="sm"
       :loading="generating"
-      :disabled="generating || !canGenerateGroup"
+      :disabled="generating || batchBlocked || !canGenerateGroup"
       @click="$emit('generate-group')"
     >
       {{ $tt('video.longVideoBatchGenerateGroup') }}
@@ -13,7 +13,7 @@
       type="default"
       size="sm"
       :loading="generating"
-      :disabled="generating || pendingAnchorCount === 0"
+      :disabled="generating || batchBlocked || pendingAnchorCount === 0"
       @click="$emit('generate-all-anchors')"
     >
       {{ $tt('video.longVideoBatchGenerateAnchors', { n: pendingAnchorCount }) }}
@@ -22,7 +22,7 @@
       type="default"
       size="sm"
       :loading="generating"
-      :disabled="generating || pendingSegmentCount === 0"
+      :disabled="generating || batchBlocked || pendingSegmentCount === 0"
       @click="$emit('generate-all-segments')"
     >
       {{ $tt('video.longVideoBatchGenerateSegments', { n: pendingSegmentCount }) }}
@@ -47,6 +47,7 @@ const props = defineProps<{
   selection: LongVideoSelection | null;
   chainMode?: import('@/types').LongVideoChainMode;
   generating?: boolean;
+  batchBlocked?: boolean;
 }>();
 
 defineEmits<{

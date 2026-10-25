@@ -8,3 +8,5 @@ db/
 *.db
 frontend/dist/
 .venv/
+/danmo-film
+

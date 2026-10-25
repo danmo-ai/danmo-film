@@ -1,45 +1,46 @@
 <template>
-  <div class="copilot-page long-video-page">
-    <div class="copilot-page__sidebar">
-      <LongVideoProjectSidebar
-        :projects="savedProjects"
-        :active-project-id="project?.project_id"
-        :loading="projectsLoading"
-        @open="loadSavedProject"
-        @new-project="createNewProject"
-        @delete="deleteSavedProject"
-      />
-    </div>
-
+  <div class="copilot-page long-video-page long-video-page--episode">
     <div class="copilot-page__main">
-      <DqAlert
-        v-if="!registrySupported"
-        type="warning"
-        :closable="false"
-        class="long-video-page__alert"
-        :title="$tt('video.longVideoModelUnsupported')"
-      />
-
-      <div class="lv-editor-tabs-wrapper">
-        <LongVideoEditorTabs
-          :model-value="editorTab"
-          :cast-count="project?.characters?.length ?? 0"
-          :scene-entity-count="project?.scenes?.length ?? 0"
-          :shot-count="shots.length"
-          :script-done="scriptStepDone"
-          :cast-done="castStepDone"
-          :scenes-done="scenesStepDone"
-          :storyboard-done="storyboardStepDone"
-          :storyboard-disabled="storyboardTabBlocked"
-          :storyboard-disabled-reason="storyboardTabBlockedReason"
-          @update:model-value="onEditorTabChange"
-          @storyboard-blocked="onStoryboardTabBlocked"
-        />
+      <div
+        v-if="productionBlockerLabels.length"
+        class="lv-production-blockers"
+        role="status"
+      >
+        <strong>{{
+          $tt('video.longVideoProductionBlockersTitle', { n: productionBlockerLabels.length })
+        }}</strong>
+        <ul>
+          <li v-for="(label, i) in productionBlockerLabels" :key="i">{{ label }}</li>
+        </ul>
       </div>
 
-      <DqSurfaceCard class="copilot-page__workspace-card studio-surface-card">
+      <div class="lv-editor-workspace-shell copilot-page__workspace-card">
+        <div class="lv-editor-workspace">
+          <div class="lv-editor-tabs-wrapper">
+            <LongVideoEditorTabs
+              variant="rail"
+              :model-value="editorTab"
+              :cast-count="effectiveCharacters.length"
+              :scene-entity-count="effectiveScenes.length"
+              :shot-count="shots.length"
+              :settings-done="settingsStepDone"
+              :script-done="scriptStepDone"
+              :cast-done="castStepDone"
+              :scenes-done="scenesStepDone"
+              :storyboard-done="storyboardStepDone"
+              :delivery-done="deliveryStepDone"
+              :storyboard-disabled="storyboardTabBlocked"
+              :storyboard-disabled-reason="storyboardTabBlockedReason"
+              @update:model-value="onEditorTabChange"
+              @storyboard-blocked="onStoryboardTabBlocked"
+            />
+          </div>
+
+          <div class="lv-editor-pane-host">
         <div v-show="editorTab === 'settings'" class="lv-editor-pane lv-editor-pane--settings">
+          <div class="lv-ep-sheet">
           <LongVideoSettingsPanel
+            mode="episode"
             :title="projectTitle"
             :keyframe-model="project?.keyframe_model ?? defaultKeyframeModel"
             :segment-model="project?.segment_video_model ?? defaultSegmentModel"
@@ -48,24 +49,37 @@
             :keyframe-model-options="keyframeModelOptions"
             :segment-model-options="segmentModelOptions"
             :model-label="modelLabel"
-            :overlap-frames="project?.overlap_frames ?? 4"
-            :project-id="project?.project_id ?? ''"
+            :overlap-frames="effectiveOverlapFrames"
+            :target-duration-sec="project?.target_duration_sec ?? 60"
+            :locked-output-size="projectOutputSize"
+            :locked-overlap-frames="effectiveOverlapFrames"
+            :can-open-project-settings="Boolean(project?.series_id)"
             @update:title="patchProjectField('title', $event)"
             @update:keyframe-model="onKeyframeModelChange"
             @update:segment-model="onSegmentModelChange"
-            @update:output-size="patchProjectField('output_size', $event)"
-            @update:overlap-frames="patchProjectField('overlap_frames', $event)"
+            @update:target-duration-sec="onTargetDurationChange"
+            @open-project-settings="openProjectSettings"
+          />
+          </div>
+          <LongVideoStepSaveBar
+            :save-label="$tt('video.longVideoSaveStepSettings')"
+            :hint="$tt('video.longVideoSaveStepSettingsHint')"
+            :status="autoSaveStatus"
+            :status-label="autoSaveLabel"
+            :loading="savingProject"
+            @save="saveProject"
           />
         </div>
 
         <div v-show="editorTab === 'script'" class="lv-editor-pane lv-editor-pane--script">
           <LongVideoBriefPanel
+            ref="briefPanelRef"
             :script-text="scriptText"
             :chapter-title="project?.chapter_title ?? ''"
             :chapter-analysis="project?.chapter_analysis ?? null"
-            :characters="project?.characters ?? []"
+            :characters="effectiveCharacters"
             :script-parsed="scriptStepDone"
-            :style-anchor="project?.style_anchor ?? ''"
+            :style-anchor="effectiveStyleAnchor"
             :target-duration-sec="project?.target_duration_sec ?? 60"
             :segment-duration-sec="project?.segment_duration_sec ?? 5"
             :script-parse-llm-model="project?.script_parse_llm_model ?? ''"
@@ -76,10 +90,14 @@
             :expanding="isScriptExpanding"
             :generating-storyboard="isStoryboardGenerating"
             :parse-error="scriptParseError"
-            :parse-blocked="storyboardTabBlocked"
-            :parse-blocked-reason="storyboardTabBlockedReason"
+            :parse-blocked="scriptParseHardBlocked"
+            :parse-blocked-reason="scriptParseHardBlockedReason"
             :project-id="project?.project_id ?? ''"
             :parsed-shot-count="shots.length"
+            :script-pipeline="activeScriptPipeline"
+            :pipeline-approving="pipelineApproving"
+            :pipeline-repairing="pipelineRepairing"
+            :pipeline-applying-repair="pipelineApplyingRepair"
             @update:script-text="onScriptTextChange"
             @update:chapter-title="patchProjectField('chapter_title', $event)"
             @update:chapter-analysis="onChapterAnalysisChange"
@@ -92,50 +110,102 @@
             @generate-storyboard="onGenerateStoryboard"
             @regenerate-beat="onRegenerateBeat"
             @clear-parse-blocked="clearParseBlocked"
-            @go-to-cast="onEditorTabChange('cast')"
-        />
+            @go-to-cast="onGoToCastFromScript"
+            @approve-facts="onApprovePipelineFacts"
+            @approve-shots="onApprovePipelineShots"
+            @generate-shots="onGeneratePipelineShots"
+            @resume-pipeline="onResumePipeline"
+            @rerun-stage="onRerunPipelineStage"
+            @repair-preview="onPipelineRepairPreview"
+            @apply-repair="onPipelineApplyRepair"
+            @discard-repair="onPipelineDiscardRepair"
+          />
+          <LongVideoStepSaveBar
+            :save-label="$tt('video.longVideoSaveStepScript')"
+            :hint="$tt('video.longVideoSaveStepScriptHint')"
+            :status="autoSaveStatus"
+            :status-label="autoSaveLabel"
+            :loading="savingProject"
+            @save="saveProject"
+          />
         </div>
 
         <div v-show="editorTab === 'cast'" class="lv-editor-pane lv-editor-pane--cast">
-        <LongVideoCastPanel
-          :characters="project?.characters ?? []"
-          :character-anchor="project?.character_anchor ?? ''"
-          :script-synopsis="projectSynopsis"
-          :script-parsed="scriptStepDone"
-          :project-id="project?.project_id ?? ''"
-          :compatible-loras="keyframeCompatibleLoras"
-          :portrait-generating-key="portraitGeneratingKey"
-          :vision-backfill-key="visionBackfillKey"
-          :batch-generating="batchPortraitGenerating"
-          @update:characters="onUpdateCharacters"
-          @generate-portrait="onGeneratePortrait"
-          @pick-portrait-gallery="onPickPortraitGallery"
-          @clear-portrait="onClearPortrait"
-          @vision-backfill="onVisionBackfillLook"
-          @batch-generate-portraits="onBatchGeneratePortraits"
-          @import-style-anchor="onUpdateStyleAnchor"
-          @go-to-script="onEditorTabChange('script')"
-          @go-to-storyboard="onCastGoToStoryboard"
-        />
+          <LongVideoCastPanel
+            :characters="effectiveCharacters"
+            :character-anchor="project?.character_anchor ?? ''"
+            :script-synopsis="projectSynopsis"
+            :script-parsed="scriptStepDone"
+            :project-id="project?.project_id ?? ''"
+            :series-linked="Boolean(project?.series_id)"
+            :asset-edit-scope="assetEditScope"
+            :can-restore-from-series="castHasEpisodeOverride"
+            :promotable-character-ids="promotableCharacterIds"
+            :show-library-publish="assetEditScope === 'series'"
+            :publishing-library="publishingLibraryCharacter"
+            :compatible-loras="keyframeCompatibleLoras"
+            :portrait-generating-key="portraitGeneratingKey"
+            :vision-backfill-key="visionBackfillKey"
+            :batch-generating="batchPortraitGenerating"
+            @update:asset-edit-scope="assetEditScope = $event"
+            @restore-series-master="onRestoreCharacterFromSeries"
+            @promote-to-series="onPromoteCharacterToSeries"
+            @publish-library-version="onPublishCharacterLibraryVersion($event)"
+            @update:characters="onUpdateCharacters"
+            @generate-portrait="onGeneratePortrait"
+            @pick-portrait-gallery="onPickPortraitGallery"
+            @clear-portrait="onClearPortrait"
+            @vision-backfill="onVisionBackfillLook"
+            @batch-generate-portraits="onBatchGeneratePortraits"
+            @import-style-anchor="onUpdateStyleAnchor"
+            @go-to-script="onEditorTabChange('script')"
+            @go-to-storyboard="onCastGoToStoryboard"
+          />
+          <LongVideoStepSaveBar
+            :save-label="$tt('video.longVideoSaveStepCast')"
+            :hint="$tt('video.longVideoSaveStepCastHint')"
+            :status="autoSaveStatus"
+            :status-label="autoSaveLabel"
+            :loading="savingProject"
+            @save="saveProject"
+          />
         </div>
 
         <div v-show="editorTab === 'scenes'" class="lv-editor-pane lv-editor-pane--scenes">
-        <LongVideoScenePanel
-          :scenes="project?.scenes ?? []"
-          :script-parsed="scriptStepDone"
-          :project-id="project?.project_id ?? ''"
-          :ref-generating-key="sceneRefGeneratingKey"
-          :vision-backfill-key="sceneVisionBackfillKey"
-          :batch-generating="batchSceneRefGenerating"
-          @update:scenes="onUpdateScenes"
-          @generate-ref="onGenerateSceneRef"
-          @pick-ref-gallery="onPickSceneRefGallery"
-          @clear-ref="onClearSceneRef"
-          @vision-backfill="onVisionBackfillSceneLook"
-          @batch-generate-refs="onBatchGenerateSceneRefs"
-          @go-to-script="onEditorTabChange('script')"
-          @go-to-storyboard="onCastGoToStoryboard"
-        />
+          <LongVideoScenePanel
+            :scenes="effectiveScenes"
+            :script-parsed="scriptStepDone"
+            :project-id="project?.project_id ?? ''"
+            :series-linked="Boolean(project?.series_id)"
+            :asset-edit-scope="assetEditScope"
+            :can-restore-from-series="sceneHasEpisodeOverrideFlag"
+            :promotable-scene-ids="promotableSceneIds"
+            :show-library-publish="assetEditScope === 'series'"
+            :publishing-library="publishingLibraryScene"
+            :ref-generating-key="sceneRefGeneratingKey"
+            :vision-backfill-key="sceneVisionBackfillKey"
+            :batch-generating="batchSceneRefGenerating"
+            @update:asset-edit-scope="assetEditScope = $event"
+            @restore-series-master="onRestoreSceneFromSeries"
+            @promote-to-series="onPromoteSceneToSeries"
+            @publish-library-version="onPublishSceneLibraryVersion($event)"
+            @update:scenes="onUpdateScenes"
+            @generate-ref="onGenerateSceneRef"
+            @pick-ref-gallery="onPickSceneRefGallery"
+            @clear-ref="onClearSceneRef"
+            @vision-backfill="onVisionBackfillSceneLook"
+            @batch-generate-refs="onBatchGenerateSceneRefs"
+            @go-to-script="onEditorTabChange('script')"
+            @go-to-storyboard="onCastGoToStoryboard"
+          />
+          <LongVideoStepSaveBar
+            :save-label="$tt('video.longVideoSaveStepScenes')"
+            :hint="$tt('video.longVideoSaveStepScenesHint')"
+            :status="autoSaveStatus"
+            :status-label="autoSaveLabel"
+            :loading="savingProject"
+            @save="saveProject"
+          />
         </div>
 
         <div v-show="editorTab === 'storyboard'" class="lv-editor-pane lv-editor-pane--storyboard">
@@ -144,6 +214,7 @@
             :selection="selection"
             :chain-mode="project?.chain_mode ?? 'keyframe_only'"
             :generating="batchGroupGenerating"
+            :batch-blocked="batchGenerateBlocked"
             @generate-group="onBatchGenerateCurrentGroup"
             @generate-all-anchors="onBatchGenerateAllAnchors"
             @generate-all-segments="onBatchGenerateAllSegments"
@@ -178,17 +249,57 @@
             </DqButton>
           </DqAlert>
           <div class="long-video-page__merge-bar">
+            <LongVideoStepSaveBar
+              class="long-video-page__merge-save"
+              :save-label="$tt('video.longVideoSaveStepStoryboard')"
+              :hint="$tt('video.longVideoSaveStepStoryboardHint')"
+              :status="autoSaveStatus"
+              :status-label="autoSaveLabel"
+              :loading="savingProject"
+              @save="saveProject"
+            />
             <DqButton
               type="primary"
               :loading="generating"
-              :disabled="generating || mergeDisabled"
+              :disabled="generating || mergeDisabled || assembleBlocked"
               @click="mergeLongVideo"
             >
               {{ $tt('video.longVideoMergeFilm') }}
             </DqButton>
           </div>
         </div>
-      </DqSurfaceCard>
+
+        <div v-show="editorTab === 'delivery'" class="lv-editor-pane lv-delivery-pane">
+          <p class="lv-delivery-pane__lead">{{ $tt('video.longVideoDeliveryLead') }}</p>
+          <div v-if="productionBlockerLabels.length" class="lv-production-blockers">
+            <strong>{{
+              $tt('video.longVideoProductionBlockersTitle', { n: productionBlockerLabels.length })
+            }}</strong>
+            <ul>
+              <li v-for="(label, i) in productionBlockerLabels" :key="`d-${i}`">{{ label }}</li>
+            </ul>
+          </div>
+          <p v-else class="lv-delivery-pane__ok">{{ $tt('video.longVideoDeliveryReady') }}</p>
+          <DqButton
+            type="primary"
+            :loading="generating"
+            :disabled="generating || mergeDisabled || assembleBlocked"
+            @click="mergeLongVideo"
+          >
+            {{ $tt('video.longVideoMergeFilm') }}
+          </DqButton>
+          <LongVideoStepSaveBar
+            :save-label="$tt('video.longVideoSaveStepStoryboard')"
+            :hint="$tt('video.longVideoSaveStepStoryboardHint')"
+            :status="autoSaveStatus"
+            :status-label="autoSaveLabel"
+            :loading="savingProject"
+            @save="saveProject"
+          />
+        </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <LongVideoInspectorDrawer
@@ -224,10 +335,10 @@
       :inpaint-source-image="keyframeInpaintSourceImage"
       :inpaint-mask-image="keyframeInpaintMaskImage"
       :can-generate-keyframe="canGenerateKeyframe"
-      :characters="project?.characters ?? []"
-      :scenes="project?.scenes ?? []"
+      :characters="effectiveCharacters"
+      :scenes="effectiveScenes"
       :character-anchor="project?.character_anchor ?? ''"
-      :style-anchor="project?.style_anchor ?? ''"
+      :style-anchor="effectiveStyleAnchor"
       :project-id="project?.project_id ?? ''"
       :parse-run-id="project?.chapter_analysis?.parse_run_id ?? ''"
       @update:open="onInspectorOpenChange"
@@ -284,8 +395,14 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch, nextTick, inject, type Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRoute, useRouter } from 'vue-router';
 import { toast, confirm } from '@/utils/feedback';
-import { api, taskIdFromSubmitResponse, type LongVideoChapterAnalyzeShot } from '@/utils/api';
+import {
+  api,
+  isRevisionConflictError,
+  taskIdFromSubmitResponse,
+  type LongVideoChapterAnalyzeShot,
+} from '@/utils/api';
 import {
   analyzeReferenceViaChat,
   checkKeyframeConsistencyViaChat,
@@ -294,7 +411,20 @@ import {
 import { $tt } from '@/utils/i18n';
 import { useTasksStore } from '@/stores/tasks';
 import { useRegistryStore } from '@/stores/registry';
-import type { LongVideoChainMode, LongVideoCharacter, LongVideoChapterAnalysis, LongVideoEditorTab, LongVideoProjectState, LongVideoProjectSummary, LongVideoScene, LongVideoShotCastLook, LongVideoShotSceneLook, LongVideoShotState, SystemInfo } from '@/types';
+import type {
+  LongVideoChainMode,
+  LongVideoCharacter,
+  LongVideoChapterAnalysis,
+  LongVideoEditorTab,
+  LongVideoProjectState,
+  LongVideoScene,
+  LongVideoSeriesDetail,
+  LongVideoSeriesState,
+  LongVideoShotCastLook,
+  LongVideoShotSceneLook,
+  LongVideoShotState,
+  SystemInfo,
+} from '@/types';
 import LongVideoParseStrategyDialog, {
   type LongVideoParseStrategy,
 } from '@/components/long-video/LongVideoParseStrategyDialog.vue';
@@ -303,13 +433,13 @@ import LongVideoCastPanel from '@/components/long-video/LongVideoCastPanel.vue';
 import LongVideoScenePanel from '@/components/long-video/LongVideoScenePanel.vue';
 import LongVideoEditorTabs from '@/components/long-video/LongVideoEditorTabs.vue';
 import LongVideoSettingsPanel from '@/components/long-video/LongVideoSettingsPanel.vue';
+import LongVideoStepSaveBar from '@/components/long-video/LongVideoStepSaveBar.vue';
 import LongVideoGroupToolbar from '@/components/long-video/LongVideoGroupToolbar.vue';
 import LongVideoBeatGroupRail from '@/components/long-video/LongVideoBeatGroupRail.vue';
 import LongVideoGroupProgressBar from '@/components/long-video/LongVideoGroupProgressBar.vue';
 import LongVideoInspectorDrawer from '@/components/long-video/LongVideoInspectorDrawer.vue';
 import LongVideoGalleryDrawer from '@/components/long-video/LongVideoGalleryDrawer.vue';
 import LongVideoOutputStrip from '@/components/long-video/LongVideoOutputStrip.vue';
-import LongVideoProjectSidebar from '@/components/long-video/LongVideoProjectSidebar.vue';
 import AssetPicker from '@/components/asset/AssetPicker.vue';
 import { useLongVideoProject } from '@/composables/useLongVideoProject';
 import { useLongVideoAutoSave } from '@/composables/useLongVideoAutoSave';
@@ -329,18 +459,11 @@ import {
 } from '@/composables/useStructuralGuide';
 import { assetIdFromGalleryPath } from '@/utils/copilotHandoff';
 import { openGlobalTaskQueue } from '@/utils/appEvents';
-import router from '@/router';
-import {
-  clearLongVideoHandoffState,
-  readLongVideoHandoffState,
-} from '@/utils/longVideoHandoff';
 import {
   appendActiveEnumFields,
   formatResolutionOptionLabel,
   normalizeParamsDef,
   parseSizeValue,
-  strengthDefaultFromRegistry,
-  strengthToSourceFidelity,
   VIDEO_INFERENCE_ENUM_KEYS,
 } from '@/utils/registryParamSchema';
 import {
@@ -351,7 +474,15 @@ import {
   buildParseProvenanceByShot,
   buildSceneEnvironmentPrompt,
   resolveLongVideoLocale,
-  collectCastReferenceAssetIdsForShot,
+  buildWorkspaceSnapshot,
+  buildKeyframeReferenceBindings,
+  buildSegmentReferenceBindings,
+  PRODUCTION_BLOCKER_LABEL_KEYS,
+  episodeDeliveryChecklist,
+  productionBlockers,
+  serializeReferenceBindings,
+  castReferenceScope,
+  segmentI2vEndFrameAssetId,
   createEmptyShot,
   defaultLongVideoProject,
   effectiveShotChainMode,
@@ -408,20 +539,58 @@ import {
   buildKeyframeGroundingMetadata,
   resolveSceneForShot,
 } from '@/utils/longVideoProject';
-import { berniniMaxReferenceImages } from '@/utils/videoEditSource';
 import {
+  assertProviderSupports,
+  capReferenceAssetIds,
+  chainModeToCapabilityMode,
+  validateReferenceRequirement,
+} from '@/utils/generationCapabilities';
+import {
+  isScriptParseError,
   mergeQualityIssues,
   type ScriptParseQualityIssue,
 } from '@/utils/scriptParseError';
+import {
+  chapterAnalysisFromPipeline,
+  resumeStageFromPipeline,
+  rerunClearsFactsApproval,
+  rerunClearsShotsApproval,
+} from '@/utils/scriptPipeline';
+import {
+  clearCharacterVariant,
+  clearSceneVariant,
+  defaultSeriesState,
+  diffCharacterAgainstSeries,
+  diffSceneAgainstSeries,
+  effectiveEpisodeRoster,
+  characterHasEpisodeOverride,
+  episodeOnlyCharacterVariant,
+  episodeOnlySceneVariant,
+  promoteEpisodeCharacterToSeries,
+  promoteEpisodeSceneToSeries,
+  sceneHasEpisodeOverride,
+  restoreEpisodeCharacterFromSeries,
+  restoreEpisodeSceneFromSeries,
+  upsertCharacterVariant,
+  upsertSceneVariant,
+} from '@/utils/longVideoSeries';
+import {
+  loadSeriesWithLibraryMigration,
+  publishCharacterToLibrary,
+  publishSceneToLibrary,
+} from '@/utils/longVideoLibrary';
+import { DQ_STORAGE, setItem } from '@/utils/storage';
 import '@/styles/long-video.css';
 
+const route = useRoute();
+const router = useRouter();
 const tasksStore = useTasksStore();
 const registryStore = useRegistryStore();
 const systemInfo = inject<Ref<SystemInfo>>('systemInfo', ref({} as SystemInfo));
+const refreshWorkspaceNav = inject<() => void>('lvRefreshWorkspaceNav', () => undefined);
 const longVideoProject = useLongVideoProject();
 const {
   profile,
-  supported: registrySupported,
   modelLabel,
   modelParameters,
   modelHasBerniniRenderer,
@@ -429,7 +598,24 @@ const {
   pickOutputSizeForModel,
   loadRegistry,
 } = useLongVideoRegistry();
-const { enhance, isEnhancing, scriptParseDecompose, scriptParseExpand, scriptParseExpandBeat, isChapterAnalyzing, isStoryboardGenerating } = useComposerLlm();
+const {
+  enhance,
+  isEnhancing,
+  scriptParseDecompose,
+  scriptParseExpand,
+  scriptParseExpandBeat,
+  scriptParseProcess,
+  isChapterAnalyzing,
+  isStoryboardGenerating,
+} = useComposerLlm();
+const pipelineApproving = ref(false);
+const pipelineRepairing = ref(false);
+const pipelineApplyingRepair = ref(false);
+const briefPanelRef = ref<{
+  setRepairPreview?: (patches: import('@/types').ScriptRepairPatch[], pipe: import('@/types').ScriptPipeline) => void;
+  discardRepairPreview?: () => void;
+} | null>(null);
+const pendingRepairPipeline = ref<import('@/types').ScriptPipeline | null>(null);
 const { locale: uiLocale } = useI18n();
 const { galleryItems, loadGallery } = useStudioGallery('image', { defaultGroupMode: false });
 
@@ -455,8 +641,8 @@ const showAssetPicker = ref(false);
 const assetPickerMode = ref<'reference' | 'control' | 'inpaint_source' | 'inpaint_mask'>('reference');
 const composeMode = ref('text2img');
 const referenceImage = ref<{ previewUrl: string; path: string; assetId?: string } | null>(null);
-const savedProjects = ref<LongVideoProjectSummary[]>([]);
-const projectsLoading = ref(false);
+const activeSeriesDetail = ref<LongVideoSeriesDetail | null>(null);
+let seriesPersistTimer: ReturnType<typeof setTimeout> | null = null;
 const portraitGeneratingKey = ref<string | null>(null);
 const visionBackfillKey = ref<string | null>(null);
 const sceneVisionBackfillKey = ref<string | null>(null);
@@ -476,6 +662,10 @@ const scriptParseProgressPhase = ref('');
 const scriptParseProgressMessage = ref('');
 const beatRegeneratingIndex = ref<number | null>(null);
 const isScriptExpanding = ref(false);
+/** Episode-local cast/scene edits vs series master (parse-time share still uses commitSharedRoster). */
+const assetEditScope = ref<'episode' | 'series'>('episode');
+const publishingLibraryCharacter = ref(false);
+const publishingLibraryScene = ref(false);
 
 type ChapterAnalyzeApiResult = import('@/utils/api').ScriptParseExpandResult;
 type DecomposeApiResult = import('@/utils/api').ScriptParseDecomposeResult;
@@ -485,14 +675,262 @@ const shots = computed(() => project.value?.shots ?? []);
 const selection = computed(() => project.value?.selection ?? null);
 const editorTab = computed((): LongVideoEditorTab => project.value?.editor_tab ?? 'script');
 
+const matchedSeriesState = computed((): LongVideoSeriesState | null => {
+  const lv = project.value;
+  const detail = activeSeriesDetail.value;
+  if (!lv?.series_id || !detail || detail.id !== lv.series_id) return null;
+  return detail.state ?? null;
+});
+
+const effectiveRoster = computed(() => {
+  const lv = project.value;
+  if (!lv) return { characters: [] as LongVideoCharacter[], scenes: [] as LongVideoScene[] };
+  return effectiveEpisodeRoster(lv, matchedSeriesState.value);
+});
+
+const effectiveCharacters = computed(() => effectiveRoster.value.characters);
+const effectiveScenes = computed(() => effectiveRoster.value.scenes);
+
+const effectiveStyleAnchor = computed(() => {
+  const lv = project.value;
+  if (!lv) return '';
+  if (matchedSeriesState.value) {
+    return matchedSeriesState.value.style_anchor ?? lv.style_anchor ?? '';
+  }
+  return lv.style_anchor ?? '';
+});
+
+const workspaceSnapshot = computed(() => {
+  const lv = project.value;
+  if (!lv) return null;
+  return buildWorkspaceSnapshot(lv, matchedSeriesState.value);
+});
+
+const productionBlockerCodes = computed(() => {
+  const lv = project.value;
+  if (!lv) return [];
+  const roster = effectiveEpisodeRoster(lv, matchedSeriesState.value);
+  return productionBlockers(projectWithEffectiveRoster(lv), roster);
+});
+
+const productionBlockerLabels = computed(() =>
+  productionBlockerCodes.value.map((c) => {
+    const key = PRODUCTION_BLOCKER_LABEL_KEYS[c];
+    const t = $tt(key);
+    return t !== key ? t : c;
+  }),
+);
+
+const batchGenerateBlocked = computed(() =>
+  productionBlockerCodes.value.some((c) =>
+    [
+      'missing_cast_reference',
+      'missing_scene_reference',
+      'missing_keyframe',
+      'reference_r2v_missing_refs',
+      'last_frame_missing_tail',
+      'first_last_missing_end_frame',
+    ].includes(c),
+  ),
+);
+
+const assembleBlocked = computed(() => productionBlockerCodes.value.length > 0);
+
+const deliveryStepDone = computed(() => {
+  const lv = project.value;
+  if (!lv) return false;
+  const roster = effectiveEpisodeRoster(lv, matchedSeriesState.value);
+  return episodeDeliveryChecklist(projectWithEffectiveRoster(lv), roster).ready;
+});
+
+const castHasEpisodeOverride = computed(() => {
+  const lv = project.value;
+  return Boolean(lv?.series_id && Object.keys(lv.character_variants ?? {}).length);
+});
+
+const sceneHasEpisodeOverrideFlag = computed(() => {
+  const lv = project.value;
+  return Boolean(lv?.series_id && Object.keys(lv.scene_variants ?? {}).length);
+});
+
+const promotableCharacterIds = computed(() => {
+  const lv = project.value;
+  if (!lv?.series_id) return [] as string[];
+  return effectiveCharacters.value
+    .filter((ch) => characterHasEpisodeOverride(lv.character_variants, ch.id))
+    .map((ch) => ch.id);
+});
+
+const promotableSceneIds = computed(() => {
+  const lv = project.value;
+  if (!lv?.series_id) return [] as string[];
+  return effectiveScenes.value
+    .filter((sc) => sceneHasEpisodeOverride(lv.scene_variants, sc.id))
+    .map((sc) => sc.id);
+});
+
+function onRestoreCharacterFromSeries(characterId?: string) {
+  const lv = project.value;
+  if (!lv?.series_id || !characterId) return;
+  longVideoProject.patchProject({
+    character_variants: restoreEpisodeCharacterFromSeries(lv.character_variants, characterId),
+  });
+}
+
+function onRestoreSceneFromSeries(sceneId?: string) {
+  const lv = project.value;
+  if (!lv?.series_id || !sceneId) return;
+  longVideoProject.patchProject({
+    scene_variants: restoreEpisodeSceneFromSeries(lv.scene_variants, sceneId),
+  });
+}
+
+async function onPromoteCharacterToSeries(characterId: string) {
+  const lv = project.value;
+  const detail = activeSeriesDetail.value;
+  if (!lv?.series_id || !detail || detail.id !== lv.series_id || !characterId) return;
+  const effective = effectiveCharacters.value.find((c) => c.id === characterId);
+  if (!effective) return;
+  try {
+    const result = promoteEpisodeCharacterToSeries(
+      detail.state,
+      effective,
+      lv.character_variants,
+    );
+    activeSeriesDetail.value = { ...detail, state: result.series };
+    longVideoProject.patchProject({ character_variants: result.characterVariants });
+    await persistActiveSeries();
+    toast.success($tt('video.longVideoPromoteEntityToSeriesOk'));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  }
+}
+
+async function onPromoteSceneToSeries(sceneId: string) {
+  const lv = project.value;
+  const detail = activeSeriesDetail.value;
+  if (!lv?.series_id || !detail || detail.id !== lv.series_id || !sceneId) return;
+  const effective = effectiveScenes.value.find((s) => s.id === sceneId);
+  if (!effective) return;
+  try {
+    const result = promoteEpisodeSceneToSeries(detail.state, effective, lv.scene_variants);
+    activeSeriesDetail.value = { ...detail, state: result.series };
+    longVideoProject.patchProject({ scene_variants: result.sceneVariants });
+    await persistActiveSeries();
+    toast.success($tt('video.longVideoPromoteEntityToSeriesOk'));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  }
+}
+
+async function onPublishCharacterLibraryVersion(characterId?: string) {
+  const detail = activeSeriesDetail.value;
+  if (!detail || assetEditScope.value !== 'series' || !characterId) return;
+  const eff = effectiveCharacters.value.find((c) => c.id === characterId);
+  if (!eff) return;
+  publishingLibraryCharacter.value = true;
+  try {
+    const published = await publishCharacterToLibrary(eff, api.library);
+    const chars = (detail.state.characters ?? []).map((c) =>
+      c.id === characterId ? published : c,
+    );
+    activeSeriesDetail.value = { ...detail, state: { ...detail.state, characters: chars } };
+    await persistActiveSeries();
+    toast.success($tt('video.longVideoPublishLibraryOk', { v: published.library_version ?? '—' }));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    publishingLibraryCharacter.value = false;
+  }
+}
+
+async function onPublishSceneLibraryVersion(sceneId?: string) {
+  const detail = activeSeriesDetail.value;
+  if (!detail || assetEditScope.value !== 'series' || !sceneId) return;
+  const eff = effectiveScenes.value.find((s) => s.id === sceneId);
+  if (!eff) return;
+  publishingLibraryScene.value = true;
+  try {
+    const published = await publishSceneToLibrary(eff, api.library);
+    const scenes = (detail.state.scenes ?? []).map((sc) =>
+      sc.id === sceneId ? published : sc,
+    );
+    activeSeriesDetail.value = { ...detail, state: { ...detail.state, scenes: scenes } };
+    await persistActiveSeries();
+    toast.success($tt('video.longVideoPublishLibraryOk', { v: published.library_version ?? '—' }));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    publishingLibraryScene.value = false;
+  }
+}
+
+/** Project snapshot with series-effective cast/scenes for production helpers. */
+function toastProductionBlockers(): boolean {
+  const lv = project.value;
+  if (!lv) return true;
+  const roster = effectiveEpisodeRoster(lv, matchedSeriesState.value);
+  const lvProd = projectWithEffectiveRoster(lv);
+  const codes = productionBlockers(lvProd, roster);
+  if (!codes.length) return false;
+  const labels = codes.slice(0, 4).map((c) => {
+    const key = PRODUCTION_BLOCKER_LABEL_KEYS[c];
+    const t = $tt(key);
+    return t !== key ? t : c;
+  });
+  toast.error($tt('video.longVideoProductionBlocked', { items: labels.join(' · ') }));
+  return true;
+}
+
+function projectWithEffectiveRoster(lv: LongVideoProjectState): LongVideoProjectState {
+  const snap = workspaceSnapshot.value;
+  if (snap) {
+    return {
+      ...lv,
+      characters: snap.characters,
+      scenes: snap.scenes,
+      style_anchor: snap.style_anchor,
+    };
+  }
+  const roster = effectiveEpisodeRoster(lv, matchedSeriesState.value);
+  return {
+    ...lv,
+    characters: roster.characters,
+    scenes: roster.scenes,
+    style_anchor: matchedSeriesState.value?.style_anchor ?? lv.style_anchor,
+  };
+}
+
+function keyframeContextForShot(shot: LongVideoShotState) {
+  const lv = project.value;
+  const snap = workspaceSnapshot.value;
+  const base = {
+    character_anchor: lv?.character_anchor ?? '',
+    characters: snap?.characters ?? lv?.characters ?? [],
+    scenes: snap?.scenes ?? lv?.scenes ?? [],
+    style_anchor: snap?.style_anchor ?? effectiveStyleAnchor.value,
+  };
+  return keyframePromptContextForShot(shot, base);
+}
+
+function isStillActiveProject(projectId: string | undefined): boolean {
+  return Boolean(projectId) && project.value?.project_id === projectId;
+}
+
 function withProjectMetadata(meta: Record<string, unknown> = {}): Record<string, unknown> {
   const pid = project.value?.project_id;
   if (!pid) return meta;
+  const sid = project.value?.series_id;
   return {
     ...meta,
     group_id: pid,
     long_video_project_id: pid,
     long_video_project_title: project.value?.title ?? '',
+    ...(sid ? { long_video_series_id: sid } : {}),
   };
 }
 
@@ -515,44 +953,80 @@ const projectSynopsis = computed(() => {
   return lv.chapter_analysis?.synopsis?.trim() || '';
 });
 
+/** Episode production setup ready: models chosen (resolution locked to project). */
+const settingsStepDone = computed(() => {
+  const lv = project.value;
+  if (!lv) return false;
+  return Boolean(
+    String(lv.keyframe_model || '').trim() && String(lv.segment_video_model || '').trim(),
+  );
+});
+
+const activeScriptPipeline = computed(() => {
+  const lv = project.value;
+  return lv?.script_pipeline ?? null;
+});
+
+const factsApproved = computed(() => Boolean(activeScriptPipeline.value?.workflow?.facts_approved));
+const shotsApproved = computed(() => Boolean(activeScriptPipeline.value?.workflow?.shots_approved));
+
 const scriptStepDone = computed(() => {
   const lv = project.value;
   if (!lv) return false;
+  if (activeScriptPipeline.value) {
+    return factsApproved.value || (lv.chapter_analysis?.scene_beats?.length ?? 0) >= 1;
+  }
   return (lv.chapter_analysis?.scene_beats?.length ?? 0) >= 2;
 });
 
 const castStepDone = computed(() => {
-  const chars = project.value?.characters ?? [];
+  const chars = effectiveCharacters.value;
   if (!chars.length) return false;
   return looksMissingPortrait(chars).length === 0;
 });
 
 const scenesStepDone = computed(() => {
-  const scenes = project.value?.scenes ?? [];
-  if (!scenes.length) return true;
+  const scenes = effectiveScenes.value;
+  if (!scenes.length) return false;
   return looksMissingSceneReference(scenes).length === 0;
 });
 
 const storyboardStepDone = computed(() => shots.value.length >= MIN_LONG_VIDEO_KEYFRAMES);
 
-const storyboardTabBlocked = computed(() => {
+/** Soft gate: facts not approved — blocks cast/scenes/storyboard tabs, not a parse failure. */
+const awaitingFactsGate = computed(
+  () => Boolean(activeScriptPipeline.value && !factsApproved.value),
+);
+
+/** Hard block shown as error alert (failed parse / critical quality / audit blockers). */
+const scriptParseHardBlocked = computed(() => {
   const analysis = project.value?.chapter_analysis;
   if (analysis?.parse_blocked) return true;
+  if (activeScriptPipeline.value?.audit_report?.issues?.some((i) => i.severity === 'blocker' && i.status !== 'resolved')) {
+    return true;
+  }
   return (analysis?.quality_issues ?? []).some((i) => i.severity === 'critical');
 });
 
-const storyboardTabBlockedReason = computed(() => {
+const scriptParseHardBlockedReason = computed(() => {
   const analysis = project.value?.chapter_analysis;
   return analysis?.parse_blocked_reason?.trim()
     || (analysis?.quality_issues ?? []).find((i) => i.severity === 'critical')?.message
     || '';
 });
 
+const storyboardTabBlocked = computed(() => awaitingFactsGate.value || scriptParseHardBlocked.value);
+
+const storyboardTabBlockedReason = computed(() => {
+  if (awaitingFactsGate.value) return $tt('video.longVideoPipeNeedFacts');
+  return scriptParseHardBlockedReason.value;
+});
+
 const defaultKeyframeModel = computed(() => profile.value?.keyframe_models[0] ?? 'z-image-turbo');
 const defaultSegmentModel = computed(() => profile.value?.segment_models[0] ?? 'wan-2.2-i2v-14b');
 const keyframeModelOptions = computed(() => profile.value?.keyframe_models ?? []);
 const segmentModelOptions = computed(() => profile.value?.segment_models ?? []);
-const segmentDurationOptions = [3, 5, 8];
+const segmentDurationOptions = [4, 5, 8];
 
 const keyframeGenerating = computed(() => keyframeGeneratingIndex.value != null);
 
@@ -653,6 +1127,14 @@ function onStoryboardTabBlocked() {
 }
 
 function onEditorTabChange(tab: LongVideoEditorTab) {
+  if (
+    activeScriptPipeline.value
+    && !factsApproved.value
+    && (tab === 'cast' || tab === 'scenes' || tab === 'storyboard')
+  ) {
+    toast.warning($tt('video.longVideoPipeNeedFacts'));
+    return;
+  }
   if (tab === 'storyboard' && storyboardTabBlocked.value) {
     onStoryboardTabBlocked();
     return;
@@ -669,9 +1151,9 @@ function patchLookPortrait(
   li: number,
   patch: { reference_asset_id?: string; portrait_prompt?: string; body?: string; vision_description?: string },
 ) {
-  const lv = project.value;
-  if (!lv?.characters?.[ci]?.looks[li]) return;
-  const characters = lv.characters.map((ch, i) => {
+  const base = effectiveCharacters.value;
+  if (!base[ci]?.looks[li]) return;
+  const characters = base.map((ch, i) => {
     if (i !== ci) return ch;
     return {
       ...ch,
@@ -700,9 +1182,9 @@ function patchSceneLookRef(
   li: number,
   patch: { reference_asset_id?: string; environment_prompt?: string; body?: string; vision_description?: string },
 ) {
-  const lv = project.value;
-  if (!lv?.scenes?.[si]?.looks[li]) return;
-  const scenes = lv.scenes.map((sc, i) => {
+  const base = effectiveScenes.value;
+  if (!base[si]?.looks[li]) return;
+  const scenes = base.map((sc, i) => {
     if (i !== si) return sc;
     return {
       ...sc,
@@ -723,6 +1205,41 @@ function patchSceneLookRef(
 }
 
 function onUpdateScenes(scenes: LongVideoScene[]) {
+  const lv = project.value;
+  if (!lv) return;
+  if (lv.series_id && activeSeriesDetail.value?.id === lv.series_id) {
+    if (assetEditScope.value === 'series') {
+      const st = { ...activeSeriesDetail.value.state, scenes };
+      activeSeriesDetail.value = { ...activeSeriesDetail.value, state: st };
+      longVideoProject.patchProject({ scenes: [] });
+      scheduleSeriesPersist();
+      return;
+    }
+    const seriesScenes = activeSeriesDetail.value.state.scenes ?? [];
+    let nextVariants = { ...(lv.scene_variants ?? {}) };
+    const keepIds = new Set(scenes.map((s) => s.id));
+    for (const id of Object.keys(nextVariants)) {
+      if (!keepIds.has(id)) nextVariants = clearSceneVariant(nextVariants, id);
+    }
+    for (const sc of scenes) {
+      const base = seriesScenes.find((s) => s.id === sc.id);
+      if (!base) {
+        nextVariants = {
+          ...nextVariants,
+          [sc.id]: episodeOnlySceneVariant(sc),
+        };
+        continue;
+      }
+      const diff = diffSceneAgainstSeries(base, sc);
+      if (diff) {
+        nextVariants = upsertSceneVariant(nextVariants, sc.id, diff);
+      } else {
+        nextVariants = clearSceneVariant(nextVariants, sc.id);
+      }
+    }
+    longVideoProject.patchProject({ scenes: [], scene_variants: nextVariants });
+    return;
+  }
   longVideoProject.patchProject({ scenes });
 }
 
@@ -730,21 +1247,22 @@ function patchSceneGrounding(
   si: number,
   patch: { grounding_panorama_asset_id?: string; grounding_depth_asset_id?: string },
 ) {
-  const lv = project.value;
-  if (!lv?.scenes?.[si]) return;
-  const scenes = lv.scenes.map((sc, i) => (i === si ? { ...sc, ...patch } : sc));
+  const base = effectiveScenes.value;
+  if (!base[si]) return;
+  const scenes = base.map((sc, i) => (i === si ? { ...sc, ...patch } : sc));
   onUpdateScenes(scenes);
 }
 
 async function onGenerateSceneRef(si: number, li: number) {
   const lv = project.value;
   if (!lv) return;
-  const sc = lv.scenes?.[si];
+  const boundProjectId = lv.project_id;
+  const sc = effectiveScenes.value[si];
   const look = sc?.looks[li];
   if (!sc || !look) return;
 
   const locale = uiLocale.value.startsWith('zh') ? 'zh' : 'en';
-  const prompt = buildSceneEnvironmentPrompt(sc, look, lv.style_anchor ?? '', locale, {
+  const prompt = buildSceneEnvironmentPrompt(sc, look, effectiveStyleAnchor.value, locale, {
     useCache: false,
   });
   const model = lv.keyframe_model ?? defaultKeyframeModel.value;
@@ -778,6 +1296,7 @@ async function onGenerateSceneRef(si: number, li: number) {
     tasksStore.registerPageOwnedStream(tid);
     const { assetId } = await waitForImageTask(tid);
     if (!assetId) throw new Error('no asset');
+    if (!isStillActiveProject(boundProjectId)) return;
     patchSceneLookRef(si, li, { reference_asset_id: assetId, environment_prompt: prompt });
     patchSceneGrounding(si, { grounding_panorama_asset_id: assetId });
     try {
@@ -786,7 +1305,7 @@ async function onGenerateSceneRef(si: number, li: number) {
         width,
         height,
       });
-      if (depth.depth_asset_id) {
+      if (depth.depth_asset_id && isStillActiveProject(boundProjectId)) {
         patchSceneGrounding(si, {
           grounding_panorama_asset_id: assetId,
           grounding_depth_asset_id: depth.depth_asset_id,
@@ -824,8 +1343,7 @@ function onClearSceneRef(si: number, li: number) {
 }
 
 async function onVisionBackfillSceneLook(si: number, li: number) {
-  const lv = project.value;
-  const sc = lv?.scenes?.[si];
+  const sc = effectiveScenes.value[si];
   const look = sc?.looks[li];
   const assetId = look?.reference_asset_id;
   if (!sc || !look || !assetId) return;
@@ -853,9 +1371,8 @@ async function onVisionBackfillSceneLook(si: number, li: number) {
 }
 
 async function onBatchGenerateSceneRefs() {
-  const lv = project.value;
-  if (!lv || batchSceneRefGenerating.value) return;
-  const missing = looksMissingSceneReference(lv.scenes ?? []);
+  if (!project.value || batchSceneRefGenerating.value) return;
+  const missing = looksMissingSceneReference(effectiveScenes.value);
   if (!missing.length) return;
   batchSceneRefGenerating.value = true;
   try {
@@ -870,16 +1387,18 @@ async function onBatchGenerateSceneRefs() {
 async function onGeneratePortrait(ci: number, li: number) {
   const lv = project.value;
   if (!lv) return;
-  const ch = lv.characters?.[ci];
+  const boundProjectId = lv.project_id;
+  const chars = effectiveCharacters.value;
+  const ch = chars[ci];
   const look = ch?.looks[li];
   if (!ch || !look) return;
 
   const locale = resolveLongVideoLocale(uiLocale.value);
-  const otherNames = (lv.characters ?? [])
+  const otherNames = chars
     .filter((_, i) => i !== ci)
     .map((c) => c.name)
     .filter(Boolean);
-  const prompt = buildPortraitPrompt(ch, look, lv.style_anchor ?? '', locale, {
+  const prompt = buildPortraitPrompt(ch, look, effectiveStyleAnchor.value, locale, {
     otherCharacterNames: otherNames,
     useCache: false,
   });
@@ -914,6 +1433,7 @@ async function onGeneratePortrait(ci: number, li: number) {
     tasksStore.registerPageOwnedStream(tid);
     const { assetId } = await waitForImageTask(tid);
     if (!assetId) throw new Error('no asset');
+    if (!isStillActiveProject(boundProjectId)) return;
     patchLookPortrait(ci, li, { reference_asset_id: assetId, portrait_prompt: prompt });
     try {
       await loadGallery(true);
@@ -944,15 +1464,15 @@ function onClearPortrait(ci: number, li: number) {
 }
 
 async function onVisionBackfillLook(ci: number, li: number) {
-  const lv = project.value;
-  const ch = lv?.characters?.[ci];
+  const chars = effectiveCharacters.value;
+  const ch = chars[ci];
   const look = ch?.looks[li];
   const assetId = look?.reference_asset_id;
   if (!ch || !look || !assetId) return;
   const key = portraitKey(ci, li);
   visionBackfillKey.value = key;
   const locale = resolveLongVideoLocale(uiLocale.value);
-  const otherNames = (lv.characters ?? [])
+  const otherNames = chars
     .filter((_, i) => i !== ci)
     .map((c) => c.name.trim())
     .filter(Boolean);
@@ -977,9 +1497,8 @@ async function onVisionBackfillLook(ci: number, li: number) {
 }
 
 async function onBatchGeneratePortraits() {
-  const lv = project.value;
-  if (!lv || batchPortraitGenerating.value) return;
-  const missing = looksMissingPortrait(lv.characters ?? []);
+  if (!project.value || batchPortraitGenerating.value) return;
+  const missing = looksMissingPortrait(effectiveCharacters.value);
   if (!missing.length) return;
   batchPortraitGenerating.value = true;
   try {
@@ -996,7 +1515,11 @@ async function onCheckConsistency(index: number) {
   const shot = lv?.shots[index];
   if (!lv || !shot?.keyframe_asset_id) return;
   const scene = shotCastMatchText(shot);
-  const portrait = resolvePrimaryCastPortraitForShot(lv.characters ?? [], shot.cast_looks ?? [], scene);
+  const portrait = resolvePrimaryCastPortraitForShot(
+    effectiveCharacters.value,
+    shot.cast_looks ?? [],
+    scene,
+  );
   if (!portrait?.reference_asset_id) return;
 
   consistencyChecking.value = true;
@@ -1171,10 +1694,22 @@ const {
 
 const segmentResolutionOptions = computed(() => resolutionOptionsForModel(segmentModelId.value));
 
+/** Resolution is project-scoped; episode inherits series output_size. */
 const projectOutputSize = computed(() => {
-  const saved = project.value?.output_size;
+  const seriesSize = matchedSeriesState.value?.output_size;
+  const saved =
+    project.value?.series_id && seriesSize
+      ? seriesSize
+      : project.value?.output_size || seriesSize;
   const picked = pickOutputSizeForModel(segmentModelId.value, saved);
   return picked ?? segmentResolutionOptions.value[0]?.value ?? '1280x704';
+});
+
+const effectiveOverlapFrames = computed(() => {
+  if (project.value?.series_id && matchedSeriesState.value) {
+    return matchedSeriesState.value.overlap_frames ?? 4;
+  }
+  return project.value?.overlap_frames ?? 4;
 });
 
 const outputSizePixels = computed(() => {
@@ -1195,6 +1730,8 @@ function scalarDefault(modelId: string, key: string, fallback: number): number {
 }
 
 function syncOutputSizeForSegmentModel(modelId: string) {
+  // Under a series, resolution is project-locked — do not write episode.output_size.
+  if (project.value?.series_id) return;
   const next = pickOutputSizeForModel(modelId, project.value?.output_size);
   if (next && next !== project.value?.output_size) {
     patchProjectField('output_size', next);
@@ -1208,6 +1745,12 @@ function onSegmentModelChange(modelId: string) {
 
 function onKeyframeModelChange(modelId: string) {
   patchProjectField('keyframe_model', modelId);
+}
+
+function openProjectSettings() {
+  const sid = project.value?.series_id;
+  if (!sid) return;
+  void router.push({ name: 'long_video_series', params: { seriesId: sid } });
 }
 
 watch(
@@ -1254,8 +1797,9 @@ function patchProjectField<K extends keyof LongVideoProjectState>(key: K, value:
 }
 
 function hasCastPortraitWork(): boolean {
-  const chars = project.value?.characters ?? [];
-  return chars.some((ch) => ch.looks.some((lk) => Boolean(lk.reference_asset_id)));
+  return effectiveCharacters.value.some((ch) =>
+    ch.looks.some((lk) => Boolean(lk.reference_asset_id)),
+  );
 }
 
 function hasStoryboardGeneratedWork(): boolean {
@@ -1270,7 +1814,7 @@ function hasExistingParseWork(): boolean {
   const lv = project.value;
   if (!lv) return false;
   if (scriptStepDone.value) return true;
-  if ((lv.characters?.length ?? 0) > 0) return true;
+  if (effectiveCharacters.value.length > 0) return true;
   if ((lv.shots?.length ?? 0) > 0) return true;
   if (hasCastPortraitWork()) return true;
   return hasStoryboardGeneratedWork();
@@ -1288,6 +1832,11 @@ function deriveNewProjectTitle(): string {
 async function bootstrapNewProjectForParse(): Promise<boolean> {
   const lv = project.value;
   if (!lv) return false;
+  const seriesId = lv.series_id?.trim();
+  if (!seriesId) {
+    toast.warning($tt('video.longVideoStandaloneRemoved'));
+    return false;
+  }
   const draft = defaultLongVideoProject({
     keyframe_model: lv.keyframe_model,
     segment_video_model: lv.segment_video_model,
@@ -1299,14 +1848,21 @@ async function bootstrapNewProjectForParse(): Promise<boolean> {
     title: deriveNewProjectTitle(),
     script_text: scriptText.value,
     chapter_title: lv.chapter_title,
+    series_id: seriesId,
   });
   try {
-    const created = await api.longVideo.createProject({
+    const { project: created } = await api.longVideo.createSeriesEpisode(seriesId, {
       title: draft.title?.trim() || $tt('video.longVideoPageTitle'),
       state: projectStateForServer(draft),
     });
     applyServerProject(created, { silent: true });
-    await loadProjectList();
+    if (created.id) {
+      await router.replace({
+        name: 'long_video_create',
+        params: { projectId: created.id },
+      });
+    }
+    await loadSeriesDetail(seriesId);
     toast.info($tt('video.longVideoParseStrategyNewProjectStarted'));
     return true;
   } catch (e: unknown) {
@@ -1399,20 +1955,57 @@ function onParseStrategyCancel() {
   parseStrategyOpen.value = false;
 }
 
+/** Write cast/scenes/style to series master when in episode mode; else onto the project. */
+function commitSharedRoster(opts: {
+  characters: LongVideoCharacter[];
+  scenes: LongVideoScene[];
+  style_anchor?: string;
+  character_anchor?: string;
+}): Pick<LongVideoProjectState, 'characters' | 'scenes' | 'style_anchor' | 'character_anchor'> {
+  const lv = project.value;
+  if (lv?.series_id && activeSeriesDetail.value?.id === lv.series_id) {
+    const st: LongVideoSeriesState = {
+      ...activeSeriesDetail.value.state,
+      characters: opts.characters,
+      scenes: opts.scenes,
+    };
+    if (opts.style_anchor !== undefined) st.style_anchor = opts.style_anchor;
+    activeSeriesDetail.value = { ...activeSeriesDetail.value, state: st };
+    scheduleSeriesPersist();
+    return {
+      characters: [],
+      scenes: [],
+      style_anchor: opts.style_anchor,
+      character_anchor: opts.character_anchor,
+    };
+  }
+  return {
+    characters: opts.characters,
+    scenes: opts.scenes,
+    style_anchor: opts.style_anchor,
+    character_anchor: opts.character_anchor,
+  };
+}
+
 function onChapterAnalysisChange(value: LongVideoChapterAnalysis | undefined) {
   const lv = project.value;
   if (!lv) return;
+  if (!value) {
+    setProjectWithChapterSync({ ...lv, chapter_analysis: value });
+    return;
+  }
+  const nextChars = value.characters?.length ? value.characters : effectiveCharacters.value;
+  const nextScenes = value.scenes?.length ? value.scenes : effectiveScenes.value;
+  const roster = commitSharedRoster({
+    characters: nextChars,
+    scenes: nextScenes,
+    style_anchor: value.style_anchor ?? effectiveStyleAnchor.value,
+    character_anchor: value.character_anchor ?? lv.character_anchor,
+  });
   setProjectWithChapterSync({
     ...lv,
     chapter_analysis: value,
-    ...(value
-      ? {
-          style_anchor: value.style_anchor ?? lv.style_anchor,
-          character_anchor: value.character_anchor ?? lv.character_anchor,
-          characters: value.characters?.length ? value.characters : lv.characters,
-          scenes: value.scenes?.length ? value.scenes : lv.scenes,
-        }
-      : {}),
+    ...roster,
   });
 }
 
@@ -1427,28 +2020,28 @@ function onSegmentDurationChange(value: number) {
 
 function storyboardShotsFromResponse(
   apiShots: LongVideoChapterAnalyzeShot[],
-  opts: {
-    defaultSegmentSec: number;
-    targetDurationSec: number;
+  opts?: {
+    defaultSegmentSec?: number;
+    targetDurationSec?: number;
     beatTexts?: string[];
   },
 ): LongVideoShotState[] {
   const fallbackDurations = allocateShotDurations({
     sceneCount: apiShots.length,
-    targetDurationSec: opts.targetDurationSec,
-    defaultSegmentSec: opts.defaultSegmentSec,
-    beatTexts: opts.beatTexts,
+    targetDurationSec: opts?.targetDurationSec ?? 60,
+    defaultSegmentSec: opts?.defaultSegmentSec ?? 5,
+    beatTexts: opts?.beatTexts,
   });
   return apiShots.map((s, i) => {
     const videoPrompt = (s.video_prompt || s.motion_prompt || '').trim();
     const startVisual = (s.start_visual_prompt || s.visual_prompt || '').trim();
     const chainMode =
-      s.chain_mode === 'first_last' || s.flf_mode === 'first_last'
-        ? ('keyframe_only' as const)
-        : s.chain_mode ??
-          (s.start_frame_mode === 'prev_segment_tail'
-            ? ('last_frame' as const)
-            : ('keyframe_only' as const));
+      s.chain_mode ??
+      (s.flf_mode === 'first_last'
+        ? ('first_last' as const)
+        : s.start_frame_mode === 'prev_segment_tail'
+          ? ('last_frame' as const)
+          : ('keyframe_only' as const));
     return {
       id: s.id || `shot_${String(i).padStart(2, '0')}`,
       order: i,
@@ -1484,7 +2077,7 @@ function storyboardShotsFromResponse(
       duration_sec:
         typeof s.duration_sec === 'number' && s.duration_sec > 0
           ? s.duration_sec
-          : fallbackDurations[i] ?? opts.defaultSegmentSec,
+          : fallbackDurations[i] ?? opts?.defaultSegmentSec ?? 5,
       status: 'draft' as const,
     };
   });
@@ -1505,19 +2098,19 @@ function applyScriptDecomposeResult(
   const mergeCharacters = opts.mergeCharacters !== false;
   const incomingChars = (result.characters ?? []) as LongVideoCharacter[];
   const mergedChars = mergeCharacters
-    ? mergeCharacterRosters(lv.characters ?? [], incomingChars)
+    ? mergeCharacterRosters(effectiveCharacters.value, incomingChars)
     : incomingChars;
   const rosterPatch = hydrateCharacterRoster(
     {
       characters: mergedChars,
       character_anchor: result.character_anchor || lv.character_anchor || '',
-      style_anchor: result.style_anchor || lv.style_anchor || '',
+      style_anchor: result.style_anchor || effectiveStyleAnchor.value || '',
     },
     uiLocale.value.startsWith('zh') ? 'zh' : 'en',
   );
   const incomingScenes = (result.scenes ?? []) as LongVideoScene[];
   const mergedScenes = mergeCharacters
-    ? mergeSceneRosters(lv.scenes ?? [], incomingScenes)
+    ? mergeSceneRosters(effectiveScenes.value, incomingScenes)
     : incomingScenes;
   const parseRunId = result.parse_run_id || lv.chapter_analysis?.parse_run_id || '';
   const parseAt = parseRunId ? new Date().toISOString() : lv.chapter_analysis?.last_parse_at;
@@ -1540,13 +2133,16 @@ function applyScriptDecomposeResult(
     shot_t2i_provenance: lv.chapter_analysis?.shot_t2i_provenance,
     parse_history: lv.chapter_analysis?.parse_history,
   };
+  const roster = commitSharedRoster({
+    characters: rosterPatch.characters ?? [],
+    scenes: mergedScenes,
+    style_anchor: rosterPatch.style_anchor,
+    character_anchor: rosterPatch.character_anchor,
+  });
   setProjectWithChapterSync({
     ...lv,
     chapter_analysis: analysis,
-    character_anchor: rosterPatch.character_anchor,
-    characters: rosterPatch.characters,
-    scenes: mergedScenes,
-    style_anchor: rosterPatch.style_anchor,
+    ...roster,
     chapter_title: result.chapter_title?.trim() || lv.chapter_title,
     shots: [],
   });
@@ -1556,11 +2152,12 @@ function applyScriptDecomposeResult(
 function buildScriptArtifactForExpand(lv: LongVideoProjectState): Record<string, unknown> | null {
   const base = lv.chapter_analysis?.script_artifact;
   if (!base || base.version !== '2.0') return null;
+  const eff = projectWithEffectiveRoster(lv);
   const merged = { ...base } as Record<string, unknown>;
   merged.title = lv.chapter_title || base.title || '';
-  merged.style_anchor = lv.style_anchor || base.style_anchor || '';
-  if (lv.characters?.length) {
-    merged.characters = lv.characters.map((ch) => ({
+  merged.style_anchor = eff.style_anchor || base.style_anchor || '';
+  if (eff.characters?.length) {
+    merged.characters = eff.characters.map((ch) => ({
       id: ch.id,
       name: ch.name,
       role: (base.characters as Array<{ id: string; role?: string }> | undefined)?.find((c) => c.id === ch.id)?.role ?? 'supporting',
@@ -1573,8 +2170,8 @@ function buildScriptArtifactForExpand(lv: LongVideoProjectState): Record<string,
       default_look_id: ch.default_look_id,
     }));
   }
-  if (lv.scenes?.length) {
-    merged.scenes = lv.scenes.map((sc) => ({
+  if (eff.scenes?.length) {
+    merged.scenes = eff.scenes.map((sc) => ({
       id: sc.id,
       name: sc.name,
       looks: sc.looks.map((lk) => ({
@@ -1607,25 +2204,29 @@ function applyScriptAnalyzeResult(
   const mergeCharacters = opts.mergeCharacters !== false;
   const incomingChars = (result.characters ?? []) as LongVideoCharacter[];
   const mergedChars = mergeCharacters
-    ? mergeCharacterRosters(lv.characters ?? [], incomingChars)
+    ? mergeCharacterRosters(effectiveCharacters.value, incomingChars)
     : incomingChars;
   const rosterPatch = hydrateCharacterRoster(
     {
       characters: mergedChars,
       character_anchor: result.character_anchor || lv.character_anchor || '',
-      style_anchor: result.style_anchor || lv.style_anchor || '',
+      style_anchor: result.style_anchor || effectiveStyleAnchor.value || '',
     },
     uiLocale.value.startsWith('zh') ? 'zh' : 'en',
   );
   const incomingScenes = (result.scenes ?? []) as LongVideoScene[];
   const mergedScenes = mergeCharacters
-    ? mergeSceneRosters(lv.scenes ?? [], incomingScenes)
+    ? mergeSceneRosters(effectiveScenes.value, incomingScenes)
     : incomingScenes;
+  const snap = buildWorkspaceSnapshot(
+    { ...lv, character_variants: lv.character_variants, scene_variants: lv.scene_variants },
+    matchedSeriesState.value,
+  );
   const projectForProvenance = {
     character_anchor: rosterPatch.character_anchor,
-    characters: rosterPatch.characters,
-    scenes: mergedScenes,
-    style_anchor: rosterPatch.style_anchor,
+    characters: rosterPatch.characters?.length ? rosterPatch.characters : snap.characters,
+    scenes: mergedScenes.length ? mergedScenes : snap.scenes,
+    style_anchor: rosterPatch.style_anchor ?? snap.style_anchor,
   };
   const parsedShots = result.shots?.length
     ? enrichShotsWithSceneLooks(
@@ -1671,13 +2272,16 @@ function applyScriptAnalyzeResult(
     shot_t2i_provenance: Object.keys(provenanceByShot).length ? provenanceByShot : lv.chapter_analysis?.shot_t2i_provenance,
     parse_history: parseHistory.length ? parseHistory : lv.chapter_analysis?.parse_history,
   };
+  const roster = commitSharedRoster({
+    characters: rosterPatch.characters ?? [],
+    scenes: mergedScenes,
+    style_anchor: rosterPatch.style_anchor,
+    character_anchor: rosterPatch.character_anchor,
+  });
   setProjectWithChapterSync({
     ...lv,
     chapter_analysis: analysis,
-    character_anchor: rosterPatch.character_anchor,
-    characters: rosterPatch.characters,
-    scenes: mergedScenes,
-    style_anchor: rosterPatch.style_anchor,
+    ...roster,
     chapter_title: result.chapter_title?.trim() || lv.chapter_title,
     shots:
       parsedShots.length
@@ -1687,10 +2291,34 @@ function applyScriptAnalyzeResult(
   return scene_beats.length;
 }
 
+function persistPipelineCheckpoint(result: import('@/utils/api').ScriptParsePipelineResult) {
+  const pipe = result.script_pipeline;
+  if (!pipe) return;
+  const lv = project.value;
+  if (!lv) return;
+  setProjectWithChapterSync({
+    ...lv,
+    script_pipeline: pipe,
+    chapter_analysis: chapterAnalysisFromPipeline(pipe, lv.chapter_analysis),
+  });
+}
+
+function handlePipelineStreamError(msg: string, err?: unknown) {
+  scriptParseError.value = msg;
+  if (isScriptParseError(err) && err.scriptPipeline) {
+    persistPipelineCheckpoint({ script_pipeline: err.scriptPipeline });
+  }
+}
+
+function pipelineBusy(): boolean {
+  return isChapterAnalyzing.value || isStoryboardGenerating.value || pipelineApproving.value || pipelineRepairing.value || pipelineApplyingRepair.value;
+}
+
 async function runScriptParsePipeline(strategy: LongVideoParseStrategy) {
+  if (pipelineBusy()) return;
   parseStrategyOpen.value = false;
   scriptParseError.value = '';
-  scriptParseProgressPhase.value = 'decompose';
+  scriptParseProgressPhase.value = 'r0';
 
   if (strategy === 'new_project') {
     if (!(await bootstrapNewProjectForParse())) return;
@@ -1708,42 +2336,254 @@ async function runScriptParsePipeline(strategy: LongVideoParseStrategy) {
 
   await ensureProjectSavedForGeneration();
   const projectId = project.value?.project_id ?? lv.project_id ?? '';
-  const parseModel = lv.script_parse_llm_model?.trim() || 'qwen3.6-27b';
+  const parseModel = lv.script_parse_llm_model?.trim() || '';
 
-  const decomposeResult = await scriptParseDecompose(
+  const pipelineResult = await scriptParseProcess(
     {
       script_text: text,
       title: (lv.chapter_title || '').trim(),
       locale: uiLocale.value,
       long_video_project_id: projectId,
       model: parseModel,
+      existing_pipeline: activeScriptPipeline.value ?? undefined,
+      stop_at: 'gate1',
     },
     {
       quietSuccess: true,
       onProgress: onParseProgress,
+      onCheckpoint: persistPipelineCheckpoint,
+      onError: handlePipelineStreamError,
     },
   );
   scriptParseProgressPhase.value = '';
   scriptParseProgressMessage.value = '';
-  if (!decomposeResult?.scene_beats?.length) {
-    if (!decomposeResult) {
+  if (!pipelineResult?.script_pipeline) {
+    if (!scriptParseError.value) {
       scriptParseError.value = $tt('video.longVideoChapterAnalyzeFailedGeneric');
-    } else {
-      scriptParseError.value = $tt('video.longVideoChapterAnalyzeEmpty');
     }
     return;
   }
 
-  const sceneCount = applyScriptDecomposeResult(decomposeResult, { mergeCharacters });
-  if (!sceneCount) return;
+  applyPipelineResult(pipelineResult, { mergeCharacters, clearShots: true });
+  toast.success($tt('video.longVideoPipeParseOk'));
+  // Stay on script tab for Gate1 review — do not auto-jump to cast.
+}
 
-  const castCount = decomposeResult.characters?.length ?? project.value?.characters?.length ?? 0;
-  toast.success(
-    $tt('video.longVideoScriptDecomposeReady', {
-      scenes: sceneCount,
-      cast: castCount,
-    }),
-  );
+async function onResumePipeline() {
+  if (pipelineBusy()) return;
+  const pipe = activeScriptPipeline.value;
+  const stage = resumeStageFromPipeline(pipe);
+  if (!pipe || !stage) return;
+  scriptParseError.value = '';
+  if (pipe.workflow.facts_approved || ['r5', 'r6', 'r7', 'gate2'].includes(stage)) {
+    await runExpandPipeline({ mode: 'full' });
+    return;
+  }
+  await runScriptParsePipeline('replace');
+}
+
+async function onRerunPipelineStage(payload: { stage: string; sceneId?: string }) {
+  if (pipelineBusy()) return;
+  const pipe = activeScriptPipeline.value;
+  if (!pipe) return;
+  const warnings: string[] = [];
+  if (rerunClearsFactsApproval(payload.stage) && pipe.workflow.facts_approved) {
+    warnings.push($tt('video.longVideoPipeRerunClearsFacts'));
+  }
+  if (rerunClearsShotsApproval(payload.stage) && pipe.workflow.shots_approved) {
+    warnings.push($tt('video.longVideoPipeRerunClearsShots'));
+  }
+  if (warnings.length) {
+    const ok = window.confirm(`${warnings.join('\n')}\n\n${$tt('video.longVideoPipeRerunConfirm', { stage: payload.stage })}`);
+    if (!ok) return;
+  }
+  pipelineApproving.value = true;
+  scriptParseError.value = '';
+  scriptParseProgressPhase.value = payload.stage;
+  try {
+    const lv = project.value;
+    const result = await api.gen.scriptParseRerun(payload.stage, {
+      existing_pipeline: pipe,
+      model: lv?.script_parse_llm_model || undefined,
+      locale: uiLocale.value,
+      long_video_project_id: lv?.project_id,
+      only_scene_ids: payload.sceneId ? [payload.sceneId] : undefined,
+      target_duration_sec: lv?.target_duration_sec ?? 60,
+      segment_duration_sec: lv?.segment_duration_sec ?? 5,
+      max_clip_sec: 10,
+    });
+    applyPipelineResult(result, {
+      mergeCharacters: true,
+      clearShots: false,
+      applyShots: Boolean(result.shots?.length),
+    });
+    toast.success($tt('video.longVideoPipeRerunOk', { stage: payload.stage }));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    scriptParseError.value = msg;
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    pipelineApproving.value = false;
+    scriptParseProgressPhase.value = '';
+    scriptParseProgressMessage.value = '';
+  }
+}
+
+function applyPipelineResult(
+  result: import('@/utils/api').ScriptParsePipelineResult,
+  opts: { mergeCharacters?: boolean; clearShots?: boolean; applyShots?: boolean } = {},
+) {
+  const lv = project.value;
+  if (!lv) return;
+  const pipe = result.script_pipeline;
+  const scene_beats = result.scene_beats ?? [];
+  const analysis = {
+    ...(lv.chapter_analysis ?? { synopsis: '', scene_beats: [] }),
+    synopsis: result.synopsis || pipe.story_map?.logline || lv.chapter_analysis?.synopsis || '',
+    mood: result.mood || pipe.story_map?.mood,
+    style_anchor: result.style_anchor || pipe.story_map?.style_anchor,
+    scene_beats: scene_beats.length ? scene_beats : lv.chapter_analysis?.scene_beats ?? [],
+    parse_run_id: result.parse_run_id || pipe.parse_run_id,
+    last_parse_at: new Date().toISOString(),
+    parse_blocked: false,
+    parse_blocked_reason: '',
+  };
+  if (pipe.workflow.facts_approved && result.characters?.length) {
+    const fake = {
+      chapter_title: lv.chapter_title || '',
+      synopsis: analysis.synopsis,
+      mood: analysis.mood,
+      character_anchor: '',
+      style_anchor: analysis.style_anchor,
+      characters: result.characters,
+      scenes: result.scenes,
+      scene_beats,
+      scene_count: scene_beats.length,
+      script_artifact: { version: '2.0', beats: [], characters: result.characters, scenes: result.scenes },
+      llm_calls: result.llm_calls ?? 0,
+      parse_run_id: result.parse_run_id,
+    };
+    applyScriptDecomposeResult(fake as import('@/utils/api').ScriptParseDecomposeResult, {
+      mergeCharacters: opts.mergeCharacters ?? true,
+    });
+    const after = project.value;
+    if (after) {
+      setProjectWithChapterSync({
+        ...after,
+        script_pipeline: pipe,
+        chapter_analysis: analysis,
+        shots: opts.clearShots ? [] : after.shots,
+      });
+    }
+    return;
+  }
+  setProjectWithChapterSync({
+    ...lv,
+    script_pipeline: pipe,
+    chapter_analysis: analysis,
+    shots: opts.clearShots ? [] : opts.applyShots && result.shots?.length
+      ? mergeParsedShotsWithPrevious(
+          lv.shots ?? [],
+          storyboardShotsFromResponse(result.shots as never, {
+            defaultSegmentSec: lv.segment_duration_sec ?? 5,
+            targetDurationSec: lv.target_duration_sec ?? 60,
+            beatTexts: (result.scene_beats ?? []).map((b) => b.beat),
+          }),
+        )
+      : lv.shots,
+  });
+}
+
+async function onApprovePipelineFacts() {
+  const pipe = activeScriptPipeline.value;
+  if (!pipe) return;
+  pipelineApproving.value = true;
+  try {
+    const result = await api.gen.scriptParseApproveFacts(pipe);
+    applyPipelineResult(result, { mergeCharacters: true, clearShots: false });
+    toast.success($tt('video.longVideoPipeFactsOk'));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    pipelineApproving.value = false;
+  }
+}
+
+async function onApprovePipelineShots() {
+  const pipe = activeScriptPipeline.value;
+  if (!pipe) return;
+  pipelineApproving.value = true;
+  try {
+    const result = await api.gen.scriptParseApproveShots(pipe);
+    applyPipelineResult(result, { applyShots: true });
+    toast.success($tt('video.longVideoPipeShotsOk'));
+    onEditorTabChange('storyboard');
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    pipelineApproving.value = false;
+  }
+}
+
+async function onGeneratePipelineShots() {
+  if (!factsApproved.value) {
+    toast.warning($tt('video.longVideoPipeNeedFacts'));
+    return;
+  }
+  await runExpandPipeline({ mode: 'full' });
+}
+
+async function onPipelineRepairPreview(payload: { findingIds: string[]; userNote: string }) {
+  const pipe = activeScriptPipeline.value;
+  if (!pipe || !payload.findingIds.length) return;
+  pipelineRepairing.value = true;
+  try {
+    const result = await api.gen.scriptParseRepairPreview({
+      pipeline: pipe,
+      finding_ids: payload.findingIds,
+      user_note: payload.userNote,
+      model: project.value?.script_parse_llm_model || undefined,
+    });
+    pendingRepairPipeline.value = result.script_pipeline;
+    briefPanelRef.value?.setRepairPreview?.(result.patches ?? [], result.script_pipeline);
+    toast.success($tt('video.longVideoPipeRepairPreviewReady', { n: result.patches?.length ?? 0 }));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    pipelineRepairing.value = false;
+  }
+}
+
+async function onPipelineApplyRepair(previewPipe: import('@/types').ScriptPipeline) {
+  const pipe = previewPipe || pendingRepairPipeline.value;
+  if (!pipe) return;
+  pipelineApplyingRepair.value = true;
+  try {
+    const result = await api.gen.scriptParseApplyPatches(pipe);
+    applyPipelineResult(result, { mergeCharacters: true, clearShots: false });
+    pendingRepairPipeline.value = null;
+    briefPanelRef.value?.discardRepairPreview?.();
+    toast.success($tt('video.longVideoPipeRepairApplied'));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    pipelineApplyingRepair.value = false;
+  }
+}
+
+function onPipelineDiscardRepair() {
+  pendingRepairPipeline.value = null;
+}
+
+function onGoToCastFromScript() {
+  if (activeScriptPipeline.value && !factsApproved.value) {
+    toast.warning($tt('video.longVideoPipeNeedFacts'));
+    return;
+  }
   onEditorTabChange('cast');
 }
 
@@ -1793,7 +2633,7 @@ async function runExpandPipeline(opts: { mode: 'full' } | { mode: 'beat'; beatIn
 
   await ensureProjectSavedForGeneration();
   const projectId = project.value?.project_id ?? lv.project_id ?? '';
-  const parseModel = lv.script_parse_llm_model?.trim() || 'qwen3.6-27b';
+  const parseModel = lv.script_parse_llm_model?.trim() || '';
   const segmentDurationSec = lv.segment_duration_sec ?? 5;
   const parseOpts = {
     quietSuccess: true as const,
@@ -1803,6 +2643,54 @@ async function runExpandPipeline(opts: { mode: 'full' } | { mode: 'beat'; beatIn
       markParseBlocked(msg, qualityIssues ?? []);
     },
   };
+
+  if (opts.mode === 'full' && activeScriptPipeline.value?.workflow?.facts_approved) {
+    if (pipelineBusy()) {
+      beatRegeneratingIndex.value = null;
+      return;
+    }
+    const pipeResult = await scriptParseProcess(
+      {
+        script_text: scriptText.value.trim() || (lv as { script_text?: string }).script_text || '',
+        title: (lv.chapter_title || '').trim(),
+        locale: uiLocale.value,
+        model: parseModel,
+        long_video_project_id: projectId,
+        existing_pipeline: {
+          ...activeScriptPipeline.value,
+          workflow: { ...activeScriptPipeline.value.workflow, facts_approved: true },
+        },
+        until_shots: true,
+        stop_at: 'gate2',
+        target_duration_sec: lv.target_duration_sec ?? 60,
+        segment_duration_sec: segmentDurationSec,
+        max_clip_sec: 10,
+      },
+      {
+        quietSuccess: true,
+        forShots: true,
+        onProgress: onParseProgress,
+        onCheckpoint: persistPipelineCheckpoint,
+        onError: (msg, err) => {
+          handlePipelineStreamError(msg, err);
+          markParseBlocked(msg, []);
+        },
+      },
+    );
+    beatRegeneratingIndex.value = null;
+    scriptParseProgressPhase.value = '';
+    scriptParseProgressMessage.value = '';
+    if (!pipeResult?.script_pipeline) {
+      if (!scriptParseError.value) {
+        scriptParseError.value = $tt('video.longVideoScriptGenerateStoryboardFailedGeneric');
+      }
+      return;
+    }
+    applyPipelineResult(pipeResult, { applyShots: true });
+    toast.success($tt('video.longVideoStoryboardReady'));
+    onEditorTabChange('storyboard');
+    return;
+  }
 
   let expandResult: ChapterAnalyzeApiResult | null = null;
   if (opts.mode === 'full') {
@@ -1936,7 +2824,50 @@ function onSelectBeatGroup(groupId: string) {
 function onUpdateCharacters(characters: LongVideoCharacter[]) {
   const lv = project.value;
   if (!lv) return;
-  const character_anchor = syncRosterToCharacterAnchor(characters, lv.style_anchor ?? '');
+  const style = effectiveStyleAnchor.value;
+  const character_anchor = syncRosterToCharacterAnchor(characters, style);
+  if (lv.series_id && activeSeriesDetail.value?.id === lv.series_id) {
+    if (assetEditScope.value === 'series') {
+      const st = { ...activeSeriesDetail.value.state, characters };
+      activeSeriesDetail.value = { ...activeSeriesDetail.value, state: st };
+      setProjectWithChapterSync({
+        ...lv,
+        characters: [],
+        character_anchor,
+      });
+      scheduleSeriesPersist();
+      return;
+    }
+    const seriesChars = activeSeriesDetail.value.state.characters ?? [];
+    let nextVariants = { ...(lv.character_variants ?? {}) };
+    const keepIds = new Set(characters.map((c) => c.id));
+    for (const id of Object.keys(nextVariants)) {
+      if (!keepIds.has(id)) nextVariants = clearCharacterVariant(nextVariants, id);
+    }
+    for (const ch of characters) {
+      const base = seriesChars.find((c) => c.id === ch.id);
+      if (!base) {
+        nextVariants = {
+          ...nextVariants,
+          [ch.id]: episodeOnlyCharacterVariant(ch),
+        };
+        continue;
+      }
+      const diff = diffCharacterAgainstSeries(base, ch);
+      if (diff) {
+        nextVariants = upsertCharacterVariant(nextVariants, ch.id, diff);
+      } else {
+        nextVariants = clearCharacterVariant(nextVariants, ch.id);
+      }
+    }
+    setProjectWithChapterSync({
+      ...lv,
+      characters: [],
+      character_anchor,
+      character_variants: nextVariants,
+    });
+    return;
+  }
   setProjectWithChapterSync({
     ...lv,
     characters,
@@ -1947,7 +2878,18 @@ function onUpdateCharacters(characters: LongVideoCharacter[]) {
 function onUpdateStyleAnchor(styleAnchor: string) {
   const lv = project.value;
   if (!lv) return;
-  const character_anchor = syncRosterToCharacterAnchor(lv.characters ?? [], styleAnchor);
+  const character_anchor = syncRosterToCharacterAnchor(effectiveCharacters.value, styleAnchor);
+  if (lv.series_id && activeSeriesDetail.value?.id === lv.series_id) {
+    const st = { ...activeSeriesDetail.value.state, style_anchor: styleAnchor };
+    activeSeriesDetail.value = { ...activeSeriesDetail.value, state: st };
+    setProjectWithChapterSync({
+      ...lv,
+      style_anchor: styleAnchor,
+      character_anchor,
+    });
+    scheduleSeriesPersist();
+    return;
+  }
   setProjectWithChapterSync({
     ...lv,
     style_anchor: styleAnchor,
@@ -2073,7 +3015,7 @@ async function onPolishVisual(index: number) {
 function openFinalInGallery() {
   const id = project.value?.final_asset_id;
   if (!id) return;
-  void router.push({ name: 'video_create', query: { asset: id } });
+  window.open(`/api/assets/${encodeURIComponent(id)}/file`, '_blank', 'noopener,noreferrer');
 }
 
 function onAddKeyframe() {
@@ -2237,19 +3179,49 @@ async function onGenerateKeyframe(index: number) {
     toast.warning($tt('studio.enterPrompt'));
     return;
   }
+  if (composeMode.value === 'img2img') {
+    toast.error($tt('video.longVideoKeyframeImg2imgUnsupported'));
+    return;
+  }
 
   const scene = shotCastMatchText(shot);
-  const castRefIds = collectCastReferenceAssetIdsForShot(
-    lv.characters ?? [],
+  const snap = workspaceSnapshot.value;
+  const chars = snap?.characters ?? effectiveCharacters.value;
+  const scenes = snap?.scenes ?? effectiveScenes.value;
+  const castScope = castReferenceScope(
+    shot.first_frame_visibility,
+    shot.segment_role,
+    shot.is_establishing_empty,
+  );
+  const refBindings = buildKeyframeReferenceBindings(
+    chars,
     shot.cast_looks ?? [],
     scene,
+    castScope,
+    shot.scene_look,
+    scenes,
   );
+  const keyframeModelRow = registryStore.registry?.models?.[keyframeModelId.value] as
+    | Record<string, unknown>
+    | undefined;
+  const refErr = validateReferenceRequirement(refBindings.length, keyframeModelRow);
+  if (refErr) {
+    toast.error(refErr);
+    return;
+  }
+  const { ids: castRefIds, capped: refsCapped } = capReferenceAssetIds(
+    refBindings.map((b) => b.asset_id),
+    keyframeModelRow,
+  );
+  if (refsCapped) {
+    toast.warning($tt('video.longVideoReferenceCapApplied'));
+  }
 
   const p = keyframeComposeParams;
   const modelStr = keyframeModelId.value;
   const adapters = mergeKeyframeLoraAdapters(
     p.lora ? [{ id: String(p.lora), weight: Number(p.lora_scale) || 0.8 }] : [],
-    lv.characters ?? [],
+    chars,
     shot.cast_looks ?? [],
     scene,
     lv.character_lora_id,
@@ -2270,33 +3242,6 @@ async function onGenerateKeyframe(index: number) {
     }
   }
 
-  const hasManualRef = referenceImage.value != null && composeMode.value === 'img2img';
-  let source_asset_id: string | null = null;
-  if (hasManualRef && referenceImage.value) {
-    const rp = referenceImage.value.path;
-    if (typeof rp === 'string' && rp.startsWith('asset:')) {
-      source_asset_id = rp.slice('asset:'.length);
-    } else {
-      try {
-        const blob = await api.gen.urlToBlob(referenceImage.value.previewUrl);
-        const up = await api.gen.uploadAsset(
-          new File([blob], 'ref.png', { type: blob.type || 'image/png' }),
-        );
-        source_asset_id = (up as { id: string }).id;
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        toast.error($tt('studio.error', { msg }));
-        return;
-      }
-    }
-  }
-
-  const useImg2img = Boolean(source_asset_id);
-  if (composeMode.value === 'img2img' && !source_asset_id) {
-    toast.warning($tt('create.refImageNeeded'));
-    return;
-  }
-
   const locale = uiLocale.value.startsWith('zh') ? 'zh' : 'en';
   const castNegative = locale === 'zh' ? KEYFRAME_CAST_NEGATIVE_ZH : KEYFRAME_CAST_NEGATIVE_EN;
   const negativePrompt = [p.negative_prompt, castRefIds.length ? castNegative : '']
@@ -2307,9 +3252,23 @@ async function onGenerateKeyframe(index: number) {
     long_video_shot_id: shot.id,
     long_video_phase: 'keyframe',
   });
+  if (snap?.revisions && Object.keys(snap.revisions).length) {
+    meta.long_video_asset_revisions = JSON.stringify(snap.revisions);
+  }
+  if (shot.cast_looks?.length) {
+    meta.long_video_cast_looks = JSON.stringify(shot.cast_looks);
+  }
+  if (shot.scene_look) {
+    meta.long_video_scene_look = JSON.stringify(shot.scene_look);
+  }
+  if (refBindings.length) {
+    meta.long_video_reference_bindings = serializeReferenceBindings(
+      refBindings.slice(0, castRefIds.length),
+    );
+  }
   if (shot.first_frame_strategy === 't2i_from_grounding' || shot.first_frame_strategy === 'scene_composite') {
-    const scene = resolveSceneForShot(lv, shot);
-    Object.assign(meta, buildKeyframeGroundingMetadata(shot, scene));
+    const grounded = resolveSceneForShot(lv, shot, scenes);
+    Object.assign(meta, buildKeyframeGroundingMetadata(shot, grounded));
   }
   if (p.scheduler) meta.scheduler = p.scheduler;
 
@@ -2327,54 +3286,30 @@ async function onGenerateKeyframe(index: number) {
 
   const seedNum = p.seed ? parseInt(String(p.seed), 10) : null;
   const { width, height } = outputSizePixels.value;
-  const t2iPrompt = keyframeGenerationPrompt(keyframeText, keyframePromptContextForShot(shot, lv));
+  const t2iPrompt = keyframeGenerationPrompt(keyframeText, keyframeContextForShot(shot));
 
   keyframeGeneratingIndex.value = index;
   try {
     await ensureProjectSavedForGeneration();
-    let submitRes: unknown;
-    if (useImg2img && source_asset_id) {
-      const editBody: Record<string, unknown> = {
-        model: modelStr,
-        operation: 'rewrite',
-        source_asset_id,
-        prompt: t2iPrompt,
-        negative_prompt: negativePrompt || '',
-        n: 1,
-        steps: p.steps,
-        guidance: p.guidance,
-        seed: seedNum,
-        adapters,
-        source_fidelity: strengthToSourceFidelity(
-          p.strength,
-          strengthDefaultFromRegistry(
-            keyframeModelConfig.value?.parameters as Record<string, unknown> | undefined,
-          ),
-        ),
-        metadata: meta,
-        priority: 'normal',
-      };
-      const editEnh = appendZImageEnhancementFields(editBody, enhCommon);
-      if (!editEnh.ok) throw new Error($tt('create.inpaintPairRequired'));
-      submitRes = await api.gen.createImageEdit(editBody);
-    } else {
-      const genBody: Record<string, unknown> = {
-        model: modelStr,
-        prompt: t2iPrompt,
-        negative_prompt: negativePrompt || '',
-        size: `${width}x${height}`,
-        n: 1,
-        steps: p.steps,
-        guidance: p.guidance,
-        seed: seedNum,
-        adapters,
-        metadata: meta,
-        priority: 'normal',
-      };
-      const genEnh = appendZImageEnhancementFields(genBody, enhCommon);
-      if (!genEnh.ok) throw new Error($tt('create.inpaintPairRequired'));
-      submitRes = await api.gen.createImageGeneration(genBody);
+    const genBody: Record<string, unknown> = {
+      model: modelStr,
+      prompt: t2iPrompt,
+      negative_prompt: negativePrompt || '',
+      size: `${width}x${height}`,
+      n: 1,
+      steps: p.steps,
+      guidance: p.guidance,
+      seed: seedNum,
+      adapters,
+      metadata: meta,
+      priority: 'normal',
+    };
+    if (castRefIds.length) {
+      genBody.reference_asset_ids = castRefIds;
     }
+    const genEnh = appendZImageEnhancementFields(genBody, enhCommon);
+    if (!genEnh.ok) throw new Error($tt('create.inpaintPairRequired'));
+    const submitRes = await api.gen.createImageGeneration(genBody);
 
     const tid = taskIdFromSubmitResponse(submitRes);
     if (!tid) throw new Error('no task id');
@@ -2426,6 +3361,42 @@ function applySegmentGenerationResult(index: number, shotId: string, assetId: st
       : s,
   );
   longVideoProject.setProject({ ...lv, shots: shotsNext });
+  void extractAndBindPrevTailFrame(index, shotId, assetId);
+}
+
+/** Extract real last frame from completed segment for last_frame chain continuity. */
+async function extractAndBindPrevTailFrame(
+  index: number,
+  shotId: string,
+  segmentAssetId: string,
+) {
+  try {
+    const frame = await api.gen.extractLastFrame(segmentAssetId);
+    const frameId = String((frame as { id?: string }).id || '').trim();
+    if (!frameId) return;
+    const lv = project.value;
+    if (!lv?.shots[index] || lv.shots[index].id !== shotId) return;
+    const shotsNext = lv.shots.map((s, i) => {
+      if (i === index) {
+        return { ...s, end_frame_asset_id: frameId };
+      }
+      if (i === index + 1) {
+        const nextMode = effectiveShotChainMode(s, lv.chain_mode);
+        if (nextMode === 'last_frame' || s.start_frame_mode === 'prev_segment_tail') {
+          return {
+            ...s,
+            start_frame_asset_id: frameId,
+            prev_tail_frame_asset_id: frameId,
+          };
+        }
+      }
+      return s;
+    });
+    longVideoProject.setProject({ ...lv, shots: shotsNext });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.warning($tt('video.longVideoTailFrameExtractFailed', { msg }));
+  }
 }
 
 function watchSegmentTaskCompletion(taskId: string, index: number, shotId: string) {
@@ -2472,16 +3443,25 @@ function buildSegmentSubmitBody(
   lv: LongVideoProjectState,
   index: number,
 ): Record<string, unknown> | null {
-  const shot = lv.shots[index];
-  if (!shot || !canGenerateSegmentShot(lv, index)) return null;
-  const sourceAssetId = segmentI2vSourceAssetId(lv, index);
+  const lvProd = projectWithEffectiveRoster(lv);
+  const shot = lvProd.shots[index];
+  if (!shot || !canGenerateSegmentShot(lvProd, index)) return null;
+  const sourceAssetId = segmentI2vSourceAssetId(lvProd, index);
   if (!sourceAssetId) return null;
   const motion = shotVideoPrompt(shot);
   if (!motion) return null;
 
-  const chainMode = effectiveShotChainMode(shot, lv.chain_mode);
-  const prevSegId = index > 0 ? lv.shots[index - 1]?.segment_asset_id : undefined;
+  const chainMode = effectiveShotChainMode(shot, lvProd.chain_mode);
+  const prevSegId = index > 0 ? lvProd.shots[index - 1]?.segment_asset_id : undefined;
+  const endFrameId = segmentI2vEndFrameAssetId(lvProd, index);
   const segModel = lv.segment_video_model;
+  const segRefBindings = buildSegmentReferenceBindings(lvProd, index, lvProd.characters ?? []);
+  const identityRefCount = segRefBindings.filter((b) => b.purpose === 'identity').length;
+  const segModelRow = registryStore.registry?.models?.[segModel] as Record<string, unknown> | undefined;
+  if (chainMode === 'reference_r2v') {
+    const refReqErr = validateReferenceRequirement(identityRefCount || 1, segModelRow);
+    if (refReqErr) return null;
+  }
   const p = segmentComposeParams;
   const fps = p.fps || scalarDefault(segModel, 'fps', 16);
   const nfSchema = normalizeParamsDef(modelParameters(segModel)).num_frames as
@@ -2508,6 +3488,9 @@ function buildSegmentSubmitBody(
       long_video_shot_id: shot.id,
       long_video_phase: 'segment',
       long_video_chain_mode: chainMode,
+      ...(segRefBindings.length
+        ? { long_video_reference_bindings: serializeReferenceBindings(segRefBindings) }
+        : {}),
       ...(chainMode === 'last_frame' && prevSegId
         ? { long_video_prev_segment_asset_id: prevSegId }
         : {}),
@@ -2517,14 +3500,17 @@ function buildSegmentSubmitBody(
   if (adapters.length > 0) {
     body.adapters = adapters;
   }
+  if (chainMode === 'first_last' && endFrameId) {
+    body.tail_asset_id = endFrameId;
+    body.end_asset_id = endFrameId;
+  }
   if (modelHasBerniniRenderer(segModel) || chainMode === 'reference_r2v') {
-    const refIds = collectCastReferenceAssetIdsForShot(
-      lv.characters ?? [],
-      shot.cast_looks ?? [],
-      shotCastMatchText(shot),
-    );
-    if (refIds.length) {
-      body.reference_asset_ids = refIds.slice(0, berniniMaxReferenceImages());
+    const refIds = segRefBindings
+      .filter((b) => b.purpose === 'identity')
+      .map((b) => b.asset_id);
+    const { ids: cappedRefs } = capReferenceAssetIds(refIds, segModelRow);
+    if (cappedRefs.length) {
+      body.reference_asset_ids = cappedRefs;
     } else if (chainMode === 'reference_r2v') {
       return null;
     }
@@ -2544,13 +3530,18 @@ async function onGenerateSegment(index: number) {
   const shot = lv.shots[index];
   if (!shot) return;
 
-  const chainMode = effectiveShotChainMode(shot, lv.chain_mode);
-  const prevSegId = index > 0 ? lv.shots[index - 1]?.segment_asset_id : undefined;
+  const lvProd = projectWithEffectiveRoster(lv);
+  const chainMode = effectiveShotChainMode(shot, lvProd.chain_mode);
+  const prevSegId = index > 0 ? lvProd.shots[index - 1]?.segment_asset_id : undefined;
   if (chainMode === 'last_frame' && index > 0 && !prevSegId) {
     toast.warning($tt('video.longVideoSegmentChainNeedPrevSegment'));
     return;
   }
-  if (!canGenerateSegmentShot(lv, index)) {
+  if (chainMode === 'last_frame' && index > 0 && prevSegId && !segmentI2vSourceAssetId(lvProd, index)) {
+    toast.warning($tt('video.longVideoSegmentChainNeedTailFrame'));
+    return;
+  }
+  if (!canGenerateSegmentShot(lvProd, index)) {
     if (!shotVideoPrompt(shot)) {
       toast.warning($tt('video.longVideoNeedMotionForSegment'));
     } else if (shot.start_frame_mode === 'anchor_link' || shot.segment_role === 'post_anchor') {
@@ -2565,10 +3556,28 @@ async function onGenerateSegment(index: number) {
     return;
   }
 
+  const segModelRow = registryStore.registry?.models?.[lvProd.segment_video_model] as
+    | Record<string, unknown>
+    | undefined;
+  const segSupportErr = assertProviderSupports(
+    chainModeToCapabilityMode(chainMode, 'segment'),
+    segModelRow,
+  );
+  if (segSupportErr) {
+    toast.error(segSupportErr);
+    return;
+  }
+
   await ensureProjectSavedForGeneration();
   const lvAfterSave = project.value ?? lv;
   const body = buildSegmentSubmitBody(lvAfterSave, index);
-  if (!body) return;
+  if (!body) {
+    if (chainMode === 'reference_r2v') {
+      const refErr = validateReferenceRequirement(1, segModelRow);
+      if (refErr) toast.error(refErr);
+    }
+    return;
+  }
 
   const shotId = shot.id;
   markSegmentPending(index);
@@ -2629,13 +3638,18 @@ async function generateSegmentAndWait(
   const shot = lv.shots[index];
   if (!shot) return false;
 
-  const chainMode = effectiveShotChainMode(shot, lv.chain_mode);
-  const prevSegId = index > 0 ? lv.shots[index - 1]?.segment_asset_id : undefined;
+  const lvProd = projectWithEffectiveRoster(lv);
+  const chainMode = effectiveShotChainMode(shot, lvProd.chain_mode);
+  const prevSegId = index > 0 ? lvProd.shots[index - 1]?.segment_asset_id : undefined;
   if (chainMode === 'last_frame' && index > 0 && !prevSegId) {
     toast.warning($tt('video.longVideoSegmentChainNeedPrevSegment'));
     return false;
   }
-  if (!canGenerateSegmentShot(lv, index)) {
+  if (chainMode === 'last_frame' && index > 0 && prevSegId && !segmentI2vSourceAssetId(lvProd, index)) {
+    toast.warning($tt('video.longVideoSegmentChainNeedTailFrame'));
+    return false;
+  }
+  if (!canGenerateSegmentShot(lvProd, index)) {
     if (!shotVideoPrompt(shot)) {
       toast.warning($tt('video.longVideoNeedMotionForSegment'));
     } else if (
@@ -2650,6 +3664,18 @@ async function generateSegmentAndWait(
   }
   if (segmentGeneratingIndices.value.has(index)) {
     toast.warning($tt('video.longVideoSegmentAlreadyQueued'));
+    return false;
+  }
+
+  const segModelRowBatch = registryStore.registry?.models?.[lvProd.segment_video_model] as
+    | Record<string, unknown>
+    | undefined;
+  const segSupportErrBatch = assertProviderSupports(
+    chainModeToCapabilityMode(chainMode, 'segment'),
+    segModelRowBatch,
+  );
+  if (segSupportErrBatch) {
+    if (opts.toastOnDone !== false) toast.error(segSupportErrBatch);
     return false;
   }
 
@@ -2693,6 +3719,7 @@ async function generateSegmentAndWait(
 
 async function runBatchPlan(keyframeIndices: number[], segmentIndices: number[]) {
   if (batchGroupGenerating.value) return;
+  if (toastProductionBlockers()) return;
   if (!keyframeIndices.length && !segmentIndices.length) {
     toast.info($tt('video.longVideoBatchNothingToDo'));
     return;
@@ -2792,16 +3819,74 @@ async function onResplitBeatGroup(groupId: string) {
   toast.success($tt('video.longVideoResplitBeatDone'));
 }
 
-async function loadProjectList() {
-  projectsLoading.value = true;
-  try {
-    savedProjects.value = await api.longVideo.listProjects(100);
-  } catch {
-    savedProjects.value = [];
-    toast.warning($tt('video.longVideoProjectListFailed'));
-  } finally {
-    projectsLoading.value = false;
+async function loadSeriesDetail(seriesId: string) {
+  if (!seriesId) {
+    activeSeriesDetail.value = null;
+    return;
   }
+  try {
+    const detail = await loadSeriesWithLibraryMigration(
+      (id) => api.longVideo.getSeries(id),
+      (id, body) => api.longVideo.updateSeries(id, body),
+      seriesId,
+      api.library,
+    );
+    activeSeriesDetail.value = {
+      ...detail,
+      state: defaultSeriesState(detail.state ?? {}),
+    };
+    setItem(DQ_STORAGE.LONG_VIDEO_SERIES_ID, seriesId);
+  } catch (e: unknown) {
+    activeSeriesDetail.value = null;
+    if (isRevisionConflictError(e)) {
+      toast.error($tt('video.longVideoRevisionConflict'));
+    } else {
+      toast.warning($tt('video.longVideoSeriesLoadFailed'));
+    }
+  }
+}
+
+function scheduleSeriesPersist() {
+  if (seriesPersistTimer) clearTimeout(seriesPersistTimer);
+  seriesPersistTimer = setTimeout(() => {
+    seriesPersistTimer = null;
+    void persistActiveSeries();
+  }, 800);
+}
+
+async function persistActiveSeries(): Promise<boolean> {
+  const detail = activeSeriesDetail.value;
+  if (!detail) return false;
+  try {
+    const saved = await api.longVideo.updateSeries(detail.id, {
+      title: detail.title,
+      state: detail.state,
+    });
+    if (activeSeriesDetail.value?.id === saved.id) {
+      activeSeriesDetail.value = {
+        ...saved,
+        state: defaultSeriesState(saved.state ?? {}),
+      };
+    }
+    return true;
+  } catch (e: unknown) {
+    if (isRevisionConflictError(e)) {
+      toast.error($tt('video.longVideoRevisionConflict'));
+      return false;
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+    return false;
+  }
+}
+
+async function flushBeforeSwitch(): Promise<void> {
+  if (seriesPersistTimer) {
+    clearTimeout(seriesPersistTimer);
+    seriesPersistTimer = null;
+    await persistActiveSeries();
+  }
+  await flushAutoSave();
 }
 
 function applyServerProject(
@@ -2817,6 +3902,11 @@ function applyServerProject(
       ...base,
       project_id: detail.id,
       title: detail.title || detail.state.title,
+      series_id: detail.state.series_id,
+      episode_number: detail.state.episode_number,
+      revision: detail.state.revision,
+      character_variants: detail.state.character_variants ?? {},
+      scene_variants: detail.state.scene_variants ?? {},
       selection: null,
     });
   });
@@ -2859,23 +3949,36 @@ async function persistProjectToServer(opts: { silent?: boolean } = {}): Promise<
       const saved = await api.longVideo.updateProject(lv.project_id, { title, state });
       runWithAutoSaveSuppressed(() => {
         patchProjectField('title', saved.title);
+        if (typeof saved.state?.revision === 'number') {
+          patchProjectField('revision', saved.state.revision);
+        }
       });
-    } else {
-      const created = await api.longVideo.createProject({ title, state });
+    } else if (lv.series_id) {
+      const { project: created } = await api.longVideo.createSeriesEpisode(lv.series_id, {
+        title,
+        state,
+      });
       runWithAutoSaveSuppressed(() => {
         longVideoProject.patchProject({ project_id: created.id, title: created.title });
       });
       if (!opts.silent) {
         toast.success($tt('video.longVideoProjectCreated'));
       }
+    } else {
+      toast.warning($tt('video.longVideoStandaloneRemoved'));
+      return false;
     }
     longVideoProject.persistNow();
-    await loadProjectList();
+    refreshWorkspaceNav();
     if (!opts.silent && lv.project_id) {
       toast.success($tt('video.longVideoSaveProjectOk'));
     }
     return true;
   } catch (e: unknown) {
+    if (isRevisionConflictError(e)) {
+      if (!opts.silent) toast.error($tt('video.longVideoRevisionConflict'));
+      return false;
+    }
     if (!opts.silent) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error($tt('studio.error', { msg }));
@@ -2886,17 +3989,47 @@ async function persistProjectToServer(opts: { silent?: boolean } = {}): Promise<
   }
 }
 
-const { status: autoSaveStatus, cancelPending: cancelAutoSavePending } = useLongVideoAutoSave({
+const {
+  status: autoSaveStatus,
+  cancelPending: cancelAutoSavePending,
+  flush: flushAutoSave,
+} = useLongVideoAutoSave({
   project,
   suppress: suppressAutoSave,
   hasPersistableContent: longVideoHasPersistableContent,
   save: persistProjectToServer,
 });
 
+const autoSaveLabel = computed(() => {
+  switch (autoSaveStatus.value) {
+    case 'pending':
+      return $tt('video.longVideoAutoSavePending');
+    case 'saving':
+      return $tt('video.longVideoAutoSaveSaving');
+    case 'saved':
+      return $tt('video.longVideoAutoSaveSaved');
+    case 'error':
+      return $tt('video.longVideoAutoSaveError');
+    default:
+      return '';
+  }
+});
+
 async function loadSavedProject(projectId: string, opts?: { silent?: boolean }) {
+  if (project.value?.project_id && project.value.project_id !== projectId) {
+    await flushBeforeSwitch();
+  }
   try {
     const detail = await api.longVideo.getProject(projectId);
+    const sid = detail.state?.series_id;
+    if (!sid) {
+      // Standalone episodes are no longer supported — only project → episode.
+      toast.warning($tt('video.longVideoStandaloneRemoved'));
+      await router.replace({ name: 'long_video_projects' });
+      return;
+    }
     applyServerProject(detail, opts);
+    await loadSeriesDetail(sid);
   } catch (e: unknown) {
     if (!opts?.silent) {
       toast.warning($tt('video.longVideoProjectLoadFailed'));
@@ -2907,71 +4040,13 @@ async function loadSavedProject(projectId: string, opts?: { silent?: boolean }) 
   }
 }
 
-async function createNewProject() {
-  const draft = defaultLongVideoProject({
-    keyframe_model: defaultKeyframeModel.value,
-    segment_video_model: defaultSegmentModel.value,
-  });
-  try {
-    const created = await api.longVideo.createProject({
-      title: draft.title?.trim() || $tt('video.longVideoPageTitle'),
-      state: projectStateForServer(draft),
-    });
-    applyServerProject(created, { silent: true });
-    await loadProjectList();
-    toast.success($tt('video.longVideoNewProjectDone'));
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    toast.error($tt('studio.error', { msg }));
-  }
-}
-
-function resetToLocalDraft() {
-  runWithAutoSaveSuppressed(() => {
-    longVideoProject.setProject(
-      defaultLongVideoProject({
-        keyframe_model: defaultKeyframeModel.value,
-        segment_video_model: defaultSegmentModel.value,
-      }),
-    );
-  });
-  syncOutputSizeForSegmentModel(defaultSegmentModel.value);
-  resetKeyframeComposeDefaults();
-  resetSegmentComposeDefaults();
-  referenceImage.value = null;
-  keyframeControlImage.value = null;
-  keyframeInpaintSourceImage.value = null;
-  keyframeInpaintMaskImage.value = null;
-  consistencyWarnings.value = {};
-}
-
-async function deleteSavedProject(projectId: string) {
-  try {
-    await confirm(
-      $tt('video.longVideoProjectDeleteConfirm'),
-      $tt('common.delete'),
-      { type: 'warning' },
-    );
-  } catch {
-    return;
-  }
-  cancelAutoSavePending();
-  const isActive = project.value?.project_id === projectId;
-  try {
-    await api.longVideo.deleteProject(projectId);
-    if (isActive) {
-      resetToLocalDraft();
-    }
-    await loadProjectList();
-    toast.success($tt('video.longVideoProjectDeleted'));
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    toast.error($tt('studio.error', { msg }));
-  }
-}
-
 async function saveProject() {
   cancelAutoSavePending();
+  if (seriesPersistTimer) {
+    clearTimeout(seriesPersistTimer);
+    seriesPersistTimer = null;
+  }
+  await persistActiveSeries();
   await persistProjectToServer({ silent: false });
 }
 
@@ -3041,6 +4116,7 @@ async function mergeLongVideo() {
     toast.warning($tt('video.longVideoNeedKeyframes'));
     return;
   }
+  if (toastProductionBlockers()) return;
 
   generating.value = true;
   try {
@@ -3051,7 +4127,7 @@ async function mergeLongVideo() {
     const p = segmentComposeParams;
     const res = await api.longVideo.assembleSegments({
       segment_asset_ids: lv.shots.map((s) => String(s.segment_asset_id)),
-      overlap_frames: lv.overlap_frames,
+      overlap_frames: effectiveOverlapFrames.value,
       fps: p.fps || scalarDefault(lv.segment_video_model, 'fps', 16),
       title: projectTitle.value.trim(),
     });
@@ -3067,45 +4143,43 @@ async function mergeLongVideo() {
   }
 }
 
-function applyHandoffFromVideoCreate(): void {
-  const handoff = readLongVideoHandoffState();
-  if (!handoff) return;
-  longVideoProject.patchProject({
-    script_text: handoff.script_text,
-    ...(handoff.target_duration_sec ? { target_duration_sec: handoff.target_duration_sec } : {}),
-    editor_tab: 'script',
-  });
-  clearLongVideoHandoffState();
-  if (handoff.script_text?.trim()) {
-    toast.info($tt('video.longVideoHandoffApplied'));
+async function bootstrapEpisodeFromRoute() {
+  const projectId = String(route.params.projectId || '');
+  if (!projectId) {
+    await router.replace({ name: 'long_video_projects' });
+    return;
+  }
+  try {
+    await loadSavedProject(projectId, { silent: true });
+  } catch {
+    toast.warning($tt('video.longVideoProjectLoadFailed'));
+    await router.replace({ name: 'long_video_projects' });
   }
 }
 
 onMounted(async () => {
   await loadRegistry();
-  await loadProjectList();
-  const pid = project.value?.project_id;
-  if (pid) {
-    try {
-      await loadSavedProject(pid, { silent: true });
-    } catch {
-      patchProjectField('project_id', undefined);
-    }
-  } else {
-    runWithAutoSaveSuppressed(() => {
-      longVideoProject.initProject({
-        keyframe_model: defaultKeyframeModel.value,
-        segment_video_model: defaultSegmentModel.value,
-        title: project.value?.title ?? '',
-      });
-    });
-  }
+  await bootstrapEpisodeFromRoute();
   syncOutputSizeForSegmentModel(segmentModelId.value);
   await loadGallery(true);
-  applyHandoffFromVideoCreate();
 });
+
+watch(
+  () => route.params.projectId,
+  (pid, prev) => {
+    if (pid && pid !== prev) void bootstrapEpisodeFromRoute();
+  },
+);
 
 watch(segmentModelId, (modelId) => {
   syncOutputSizeForSegmentModel(modelId);
 });
+
+watch(
+  () => project.value?.series_id,
+  (sid) => {
+    assetEditScope.value = sid ? 'episode' : 'series';
+  },
+  { immediate: true },
+);
 </script>

@@ -1,0 +1,249 @@
+/* Danmo Film app shell — aligned with Danmo Make / h3.c.ui (icon sidebar + glass chrome) */
+
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100%;
+  height: 100%;
+}
+
+html:not(.dq-tauri-macos) .film-shell {
+  background:
+    radial-gradient(
+      1200px 600px at 10% -10%,
+      color-mix(in srgb, var(--dq-accent, #0a84ff) 16%, transparent),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 480px at 100% 0%,
+      color-mix(in srgb, var(--dq-accent, #0a84ff) 8%, transparent),
+      transparent 50%
+    ),
+    var(--dq-bg-page, #0b0b0c);
+}
+
+.film-shell.dq-app-shell--sidebar {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 100vh;
+}
+
+.film-shell .film-sidebar.app-sidebar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: var(--dq-shell-sidebar-width, 60px);
+  flex-shrink: 0;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.film-shell .film-main.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--dq-bg-page, #111) 90%, transparent);
+}
+
+html.dq-tauri-macos .film-shell .film-main.app-main {
+  background: var(--dq-bg-page, transparent);
+}
+
+.film-shell .film-main.app-main:has(.film-page) {
+  padding: 24px 28px 32px;
+  overflow-y: auto;
+}
+
+.film-shell .film-main.app-main:has(.lv-workspace) {
+  padding: 0;
+  overflow: hidden;
+}
+
+.film-shell .film-main.app-main:has(.settings-page) {
+  padding: 0;
+  overflow: hidden;
+}
+
+.film-page {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.film-page__head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.film-page__head h1 {
+  margin: 0;
+  font-size: var(--dq-font-size-title, 20px);
+  font-weight: 650;
+  letter-spacing: var(--dq-tracking-tight, -0.02em);
+  color: var(--dq-label-primary);
+}
+
+.film-page__desc {
+  margin: 0;
+  font-size: var(--dq-font-size-body, 14px);
+  line-height: 1.55;
+  color: var(--dq-label-secondary);
+  max-width: 52ch;
+}
+
+.film-page__block {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.film-page__section-title {
+  margin: 0 0 6px;
+  font-size: var(--dq-font-size-body, 14px);
+  font-weight: 600;
+  color: var(--dq-label-primary);
+}
+
+.film-page__hint {
+  margin: 0 0 12px;
+  font-size: var(--dq-font-size-caption, 12px);
+  line-height: 1.5;
+  color: var(--dq-label-tertiary);
+}
+
+.film-page__block > .film-page__section-title + .settings-pref-pane-form,
+.film-page__block > .film-page__hint + .settings-pref-pane-form {
+  margin-top: 0;
+}
+
+.film-page .settings-pref-pane-form {
+  border-radius: 12px;
+  border: 0.5px solid var(--dq-border-subtle);
+  background: var(--dq-glass-grouped-bg, color-mix(in srgb, var(--dq-surface-elevated) 72%, transparent));
+  -webkit-backdrop-filter: var(--dq-glass-blur-light);
+  backdrop-filter: var(--dq-glass-blur-light);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
+  overflow: hidden;
+}
+
+.film-page .settings-pref-pane-form .dq-pref-row {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* Keep macOS-style left label / right control; theme.css already forces row */
+.film-page .settings-pref-pane-form .dq-pref-row__label {
+  flex: 0 0 132px !important;
+  max-width: 40% !important;
+}
+
+.film-page .settings-pref-pane-form .dq-pref-row__content {
+  justify-content: flex-end !important;
+}
+
+.film-page .settings-pref-pane-form .dq-pref-row__content > .dq-input,
+.film-page .settings-pref-pane-form .dq-pref-row__content > .dq-select {
+  width: min(100%, 320px);
+  margin-left: auto;
+}
+
+.film-page .settings-pref-pane-form .dq-pref-row__content > .film-page__path {
+  width: 100%;
+  margin-left: 0;
+  text-align: left;
+}
+
+.film-page__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.film-page__status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 0.5px solid var(--dq-border-subtle);
+  background: color-mix(in srgb, var(--dq-fill-tertiary) 55%, transparent);
+}
+
+.film-page__status-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: var(--dq-font-size-body, 14px);
+}
+
+.film-page__status-name {
+  font-weight: 600;
+  color: var(--dq-label-primary);
+  min-width: 4.5em;
+}
+
+.film-page__status-id {
+  color: var(--dq-label-secondary);
+  font-family: var(--dq-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.film-page__status-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.film-page__status-badge.is-ok {
+  color: var(--dq-accent);
+  background: color-mix(in srgb, var(--dq-accent) 16%, transparent);
+}
+
+.film-page__status-badge.is-bad {
+  color: var(--dq-danger, #ff6369);
+  background: color-mix(in srgb, var(--dq-danger, #ff6369) 14%, transparent);
+}
+
+.film-page__status-detail {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dq-label-tertiary);
+  word-break: break-all;
+}
+
+.film-page .settings-pref-pane-form .film-page__path {
+  width: 100%;
+  text-align: right;
+}
+
+.film-page__error {
+  margin: 0;
+  color: var(--dq-danger);
+  font-size: var(--dq-font-size-body, 14px);
+}
+
+.film-page__ok {
+  margin: 0;
+  color: var(--dq-accent);
+  font-size: var(--dq-font-size-body, 14px);
+}
+
+.film-page__path {
+  display: block;
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--dq-label-secondary);
+  font-family: var(--dq-font-mono, ui-monospace, monospace);
+}

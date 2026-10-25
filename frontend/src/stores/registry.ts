@@ -19,6 +19,9 @@ export const useRegistryStore = defineStore('registry', () => {
       registry.value = data;
       lastLoad = now;
       return registry.value;
+    } catch {
+      registry.value = null;
+      return null;
     } finally {
       loading.value = false;
     }

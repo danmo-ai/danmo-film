@@ -558,10 +558,9 @@ const keyframePromptModeHint = computed(() => {
   return $tt('video.longVideoGenerationPromptT2iHint');
 });
 
-const clipChainMode = computed(() => {
-  const raw = effectiveShotChainMode(selectedShot.value ?? undefined, props.defaultChainMode);
-  return raw === 'first_last' ? 'keyframe_only' : raw;
-});
+const clipChainMode = computed(() =>
+  effectiveShotChainMode(selectedShot.value ?? undefined, props.defaultChainMode),
+);
 
 const canUseLastFrame = computed(() => {
   const idx = segmentIndex.value;

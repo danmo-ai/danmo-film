@@ -48,6 +48,25 @@ export function useLongVideoAutoSave(options: {
     }, DEBOUNCE_MS);
   }
 
+  /** Cancel debounce and await in-flight / immediate save for the current project. */
+  async function flush(): Promise<boolean> {
+    cancelPending();
+    if (!canAutoSave(options.project.value)) {
+      await chain;
+      return true;
+    }
+    status.value = 'saving';
+    const run = chain.then(async () => {
+      const lv = options.project.value;
+      if (!canAutoSave(lv)) return true;
+      const ok = await options.save({ silent: true });
+      status.value = ok ? 'saved' : 'error';
+      return ok;
+    });
+    chain = run.then(() => undefined);
+    return run;
+  }
+
   watch(
     () => options.project.value,
     () => scheduleSave(),
@@ -56,5 +75,5 @@ export function useLongVideoAutoSave(options: {
 
   onUnmounted(() => cancelPending());
 
-  return { status, cancelPending };
+  return { status, cancelPending, flush };
 }

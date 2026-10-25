@@ -7,6 +7,13 @@ import {
   createEmptyShot,
   defaultLongVideoProject,
   effectiveShotChainMode,
+  buildWorkspaceSnapshot,
+  invalidateShotArtifactsOnBindingChange,
+  lastFrameChainStartAssetId,
+  productionBlockers,
+  episodeDeliveryChecklist,
+  buildKeyframeReferenceBindings,
+  segmentI2vEndFrameAssetId,
   insertKeyframeAfter,
   insertKeyframeBefore,
   invalidateSegmentAsset,
@@ -30,6 +37,7 @@ import {
   sceneEnvironmentForPrompt,
   enrichShotsWithSceneLooks,
   mergeCharacterRosters,
+  characterVisualIdentity,
   migrateLongVideoProject,
   computeStoryboardReadiness,
   MIN_LONG_VIDEO_KEYFRAMES,
@@ -53,6 +61,7 @@ import {
   insertFaceAnchorIntoGroup,
   groupHasFaceAnchor,
   planGroupGeneration,
+  projectStateForServer,
 } from './longVideoProject';
 
 function assert(cond: boolean, msg: string) {
@@ -110,6 +119,11 @@ assert(!removeKeyframeNeedsConfirm([createEmptyShot(0), createEmptyShot(1)], 0),
 
 assert(effectiveShotChainMode(shot('a', { chain_mode: 'last_frame' }), 'keyframe_only') === 'last_frame', 'shot override');
 assert(effectiveShotChainMode(shot('a'), 'last_frame') === 'last_frame', 'project default');
+assert(
+  effectiveShotChainMode(shot('a', { chain_mode: 'first_last', flf_mode: 'first_last' }), 'keyframe_only')
+    === 'first_last',
+  'preserve first_last chain mode',
+);
 
 assert(sceneMentionsCharacter('赵今麦低头看手机', '赵今麦'), 'indexOf name');
 assert(sceneMentionsCharacter('屏上挑战孙悟空字样', '孙悟空'), 'indexOf substring');
@@ -169,6 +183,39 @@ assert(refs.length === 1 && refs[0] === 'asset_a', 'collect refs dedupe');
 const portraitPrompt = buildPortraitPrompt(chars[0]!, chars[0]!.looks[0]!, 'cinematic', 'en', { useCache: false });
 assert(portraitPrompt.includes('Alice'), 'portrait prompt');
 assert(portraitPrompt.includes('single person'), 'portrait solo constraint');
+
+const identityPortrait = buildPortraitPrompt(
+  {
+    id: 'c_id',
+    name: '林婉',
+    role: 'protagonist',
+    age_range: '约28',
+    identity_baseline: '合租室友',
+    visual_identity: '短发，瓜子脸',
+    default_look_id: 'l1',
+    looks: [{ id: 'l1', label: '日常', body: '白T恤黑短裤' }],
+  },
+  { id: 'l1', label: '日常', body: '白T恤黑短裤' },
+  'cinematic',
+  'zh',
+  { useCache: false },
+);
+assert(identityPortrait.includes('合租室友'), 'portrait includes identity baseline');
+assert(identityPortrait.includes('短发'), 'portrait includes visual identity');
+assert(identityPortrait.includes('白T恤'), 'portrait includes look wardrobe');
+
+const appearanceSplit = portraitAppearanceForPrompt(
+  {
+    id: 'c1',
+    name: '赵今麦',
+    visual_identity: '短发，年轻女性',
+    default_look_id: 'l1',
+    looks: [],
+  },
+  { id: 'l1', label: '默认', body: '红色夹克' },
+);
+assert(appearanceSplit.includes('短发'), 'visual_identity drives face');
+assert(appearanceSplit.includes('红色夹克'), 'look body becomes wardrobe when identity set');
 
 const appearance = portraitAppearanceForPrompt(
   { id: 'c1', name: '赵今麦', default_look_id: 'l1', looks: [] },
@@ -313,6 +360,20 @@ assert(
   promptDesert.includes('正午金黄') || promptDesert.includes('金黄沙丘'),
   'scene env from vision or structured body',
 );
+
+{
+  const ep = defaultLongVideoProject({
+    series_id: 'lvs_x',
+    characters: chars,
+    scenes: desertScenes,
+    character_variants: { c1: { character_id: 'c1', name: '别名' } },
+  });
+  const forServer = projectStateForServer(ep);
+  assert(forServer.series_id === 'lvs_x', 'keeps series_id');
+  assert((forServer.characters?.length ?? 0) === 0, 'strips materialized cast on episode');
+  assert((forServer.scenes?.length ?? 0) === 0, 'strips materialized scenes on episode');
+  assert(forServer.character_variants?.c1?.name === '别名', 'keeps variants');
+}
 
 const richVisual =
   'Indoor night, close-up on lead actor face, cool tone, fingers hovering over confirm button';
@@ -495,22 +556,157 @@ assert(!shotNeedsKeyframe(tailShot), 'tail segment skips keyframe');
 assert(shotVideoPrompt(tailShot) === 'chase continues', 'video prompt priority');
 assert(shotKeyframeText({ ...tailShot, start_visual_prompt: 'still' }) === 'still', 'start visual text');
 
-const lvShots = [
+const lvShotsNoTail = [
   shot('a', { keyframe_asset_id: 'kf0', segment_asset_id: 'seg0' }),
   tailShot,
 ];
 assert(
-  canGenerateSegmentShot({ shots: lvShots, chain_mode: 'keyframe_only' }, 1),
-  'tail can generate when prev segment exists',
+  !canGenerateSegmentShot({ shots: lvShotsNoTail, chain_mode: 'keyframe_only' }, 1),
+  'tail blocked without extracted tail frame',
+);
+const lvShotsPrevEnd = [
+  shot('a', { keyframe_asset_id: 'kf0', segment_asset_id: 'seg0', end_frame_asset_id: 'tail0' }),
+  tailShot,
+];
+assert(
+  canGenerateSegmentShot({ shots: lvShotsPrevEnd, chain_mode: 'keyframe_only' }, 1),
+  'tail can generate when prev segment and prev end_frame exist',
 );
 assert(
-  segmentI2vSourceAssetId({ shots: lvShots, chain_mode: 'keyframe_only' }, 1) === 'kf0',
-  'tail uses prev keyframe as submit placeholder',
+  segmentI2vSourceAssetId({ shots: lvShotsPrevEnd, chain_mode: 'keyframe_only' }, 1) === 'tail0',
+  'tail uses prev end frame not keyframe',
+);
+assert(
+  segmentI2vSourceAssetId({ shots: lvShotsNoTail, chain_mode: 'keyframe_only' }, 1) === undefined,
+  'tail does not fake keyframe source',
+);
+const lvShotsWithTail = [
+  lvShotsPrevEnd[0]!,
+  { ...tailShot, prev_tail_frame_asset_id: 'tail_extracted' },
+];
+assert(
+  segmentI2vSourceAssetId({ shots: lvShotsWithTail, chain_mode: 'keyframe_only' }, 1) === 'tail_extracted',
+  'shot tail id wins over prev end frame',
+);
+assert(
+  lastFrameChainStartAssetId(lvShotsWithTail[1]!, lvShotsWithTail[0]) === 'tail_extracted',
+  'last frame chain resolves tail asset',
 );
 assert(
   !canGenerateSegmentShot({ shots: [shot('a'), tailShot], chain_mode: 'keyframe_only' }, 1),
   'tail blocked without prev segment',
 );
+
+const flfShots = [
+  shot('a', {
+    chain_mode: 'first_last',
+    keyframe_asset_id: 'kf1',
+    end_frame_asset_id: 'end1',
+    video_prompt: 'move',
+    motion_prompt: 'move',
+  }),
+];
+assert(
+  canGenerateSegmentShot({ shots: flfShots, chain_mode: 'first_last' }, 0),
+  'first_last needs keyframe and end frame',
+);
+assert(
+  segmentI2vEndFrameAssetId({ shots: flfShots }, 0) === 'end1',
+  'first_last end frame id',
+);
+assert(
+  !canGenerateSegmentShot(
+    { shots: [{ ...flfShots[0]!, end_frame_asset_id: undefined }], chain_mode: 'first_last' },
+    0,
+  ),
+  'first_last blocked without end frame',
+);
+
+const invalidated = invalidateShotArtifactsOnBindingChange(
+  shot('a', { keyframe_asset_id: 'kf', cast_looks: [{ character_id: 'c1', look_id: 'l1' }] }),
+  shot('a', { cast_looks: [{ character_id: 'c1', look_id: 'l2' }] }),
+);
+assert(!invalidated.keyframe_asset_id, 'binding change clears keyframe');
+
+const snap = buildWorkspaceSnapshot(
+  defaultLongVideoProject({ series_id: 'lvs_1', character_variants: {} }),
+  { version: 1, characters: chars, scenes: [], style_anchor: 'noir' },
+);
+assert(snap.characters.length === 2, 'workspace snapshot materializes roster');
+assert(snap.style_anchor === 'noir', 'workspace snapshot style from series');
+
+const blockers = productionBlockers(
+  { shots: [shot('a', { video_prompt: 'x', motion_prompt: 'x' })], chain_mode: 'keyframe_only' },
+  { characters: chars, scenes: [] },
+);
+assert(blockers.includes('missing_keyframe'), 'production blockers flag missing keyframe');
+
+const castNoRef = [
+  {
+    id: 'c1',
+    name: 'Lin',
+    default_look_id: 'l1',
+    looks: [{ id: 'l1', label: 'd', body: 'dress' }],
+  },
+];
+const castBlockers = productionBlockers(
+  { shots: [], chain_mode: 'keyframe_only' },
+  { characters: castNoRef, scenes: [] },
+);
+assert(castBlockers.includes('missing_cast_reference'), 'missing cast ref blocker');
+
+const tailBlockers = productionBlockers(
+  {
+    shots: [
+      {
+        id: 'a',
+        order: 0,
+        visual_prompt: '',
+        motion_prompt: 'm',
+        video_prompt: 'm',
+        segment_role: 'keyframe',
+        start_frame_mode: 'keyframe',
+        segment_asset_id: 'seg1',
+      },
+      {
+        id: 'b',
+        order: 1,
+        visual_prompt: '',
+        motion_prompt: 'm2',
+        video_prompt: 'm2',
+        segment_role: 'keyframe',
+        start_frame_mode: 'prev_segment_tail',
+        chain_mode: 'last_frame',
+      },
+    ],
+    chain_mode: 'last_frame',
+  },
+  { characters: [], scenes: [] },
+);
+assert(tailBlockers.includes('last_frame_missing_tail'), 'last frame tail blocker');
+
+const bindings = buildKeyframeReferenceBindings(
+  castNoRef,
+  [{ character_id: 'c1', look_id: 'l1' }],
+  'Lin in room',
+  'face',
+);
+assert(bindings.length === 0, 'no bindings without refs');
+
+const checklist = episodeDeliveryChecklist(
+  defaultLongVideoProject({
+    shots: [
+      shot('a', {
+        video_prompt: 'x',
+        motion_prompt: 'x',
+        cast_looks: [{ character_id: 'c1', look_id: 'l1' }],
+      }),
+    ],
+  }),
+  { characters: castNoRef, scenes: [] },
+);
+assert(!checklist.ready, 'checklist not ready without script and refs');
+assert(checklist.items.some((i) => i.id === 'cast_refs' && !i.ok), 'checklist cast refs');
 
 const establishing = shot('est1', {
   segment_role: 'establishing',
@@ -528,5 +724,34 @@ const groupPlan = planGroupGeneration(
   { groupId: 'beat_0', beatIndex: 0, title: 't', shotIndices: withAnchor.map((_, i) => i) },
 );
 assert(groupPlan.keyframeIndices.length > 0, 'plan lists pending keyframes');
+
+const mergedIdentity = mergeCharacterRosters(
+  [
+    {
+      id: 'c1',
+      name: '林婉',
+      visual_identity: '短发',
+      age_range: '约28',
+      default_look_id: 'l1',
+      looks: [{ id: 'l1', label: '日常', body: '白裙', reference_asset_id: 'fas_1' }],
+    },
+  ],
+  [
+    {
+      id: 'c1',
+      name: '林婉',
+      role: 'protagonist',
+      visual_identity: '',
+      identity_baseline: '设计师',
+      default_look_id: 'l1',
+      looks: [{ id: 'l1', label: '日常', body: '黑裙' }],
+    },
+  ],
+);
+assert(mergedIdentity[0]?.visual_identity === '短发', 'merge keeps prior visual_identity when incoming empty');
+assert(mergedIdentity[0]?.identity_baseline === '设计师', 'merge takes incoming baseline');
+assert(mergedIdentity[0]?.role === 'protagonist', 'merge takes incoming role');
+assert(mergedIdentity[0]?.looks[0]?.reference_asset_id === 'fas_1', 'merge keeps portrait');
+assert(characterVisualIdentity({ id: 'x', name: 'a', default_look_id: 'l', looks: [], identity_notes: '旧备注' }) === '旧备注', 'legacy identity_notes fallback');
 
 console.log('longVideoProject.unit: OK');

@@ -1,204 +1,291 @@
 <template>
-  <section class="lv-settings" :class="{ 'lv-settings--inline': inline }">
+  <section
+    class="lv-settings"
+    :class="{
+      'lv-settings--inline': inline,
+      'lv-settings--episode': mode === 'episode' && !inline,
+      'lv-settings--project': mode === 'project' && !inline,
+    }"
+  >
+    <!-- Project page: compact inline toolbar (series workspace) -->
     <template v-if="inline">
-        <div class="lv-settings-bar" role="group" :aria-label="$tt('video.longVideoProjectSettings')">
-          <div class="lv-settings-bar__field">
-            <label class="lv-settings-bar__label" :for="ids.title">{{ $tt('video.longVideoProjectTitle') }}</label>
+      <div class="lv-settings-bar" role="group" :aria-label="panelAriaLabel">
+        <div class="lv-settings-bar__field">
+          <label class="lv-settings-bar__label" :for="ids.title">{{ titleLabel }}</label>
+          <DqInput
+            :id="ids.title"
+            :model-value="title"
+            size="sm"
+            class="lv-settings-bar__control"
+            :placeholder="titlePlaceholder"
+            @update:model-value="$emit('update:title', $event)"
+          />
+        </div>
+
+        <div class="lv-settings-bar__field">
+          <label class="lv-settings-bar__label" :for="ids.keyframe">{{ $tt('video.longVideoKeyframeModel') }}</label>
+          <DqSelect
+            :id="ids.keyframe"
+            :model-value="keyframeModel"
+            size="sm"
+            variant="ghost"
+            class="lv-settings-bar__control"
+            @update:model-value="$emit('update:keyframeModel', $event)"
+          >
+            <DqOption v-for="optId in keyframeModelOptions" :key="optId" :label="modelLabel(optId)" :value="optId" />
+          </DqSelect>
+        </div>
+
+        <div class="lv-settings-bar__field">
+          <label class="lv-settings-bar__label" :for="ids.segment">{{ $tt('video.longVideoSegmentModel') }}</label>
+          <DqSelect
+            :id="ids.segment"
+            :model-value="segmentModel"
+            size="sm"
+            variant="ghost"
+            class="lv-settings-bar__control"
+            @update:model-value="$emit('update:segmentModel', $event)"
+          >
+            <DqOption v-for="optId in segmentModelOptions" :key="optId" :label="modelLabel(optId)" :value="optId" />
+          </DqSelect>
+        </div>
+
+        <div class="lv-settings-bar__field">
+          <label class="lv-settings-bar__label" :for="ids.size">{{ $tt('video.longVideoOutputSize') }}</label>
+          <DqSelect
+            :id="ids.size"
+            :model-value="outputSize"
+            size="sm"
+            variant="ghost"
+            class="lv-settings-bar__control"
+            @update:model-value="$emit('update:outputSize', $event)"
+          >
+            <DqOption
+              v-for="opt in outputSizeOptions"
+              :key="opt.value"
+              :label="formatResolutionOptionLabel(opt)"
+              :value="opt.value"
+            />
+          </DqSelect>
+        </div>
+
+        <div class="lv-settings-bar__field">
+          <label class="lv-settings-bar__label" :for="ids.overlap">{{ $tt('video.longVideoOverlapFrames') }}</label>
+          <DqSelect
+            :id="ids.overlap"
+            :model-value="overlapFrames"
+            size="sm"
+            variant="ghost"
+            class="lv-settings-bar__control"
+            @update:model-value="$emit('update:overlapFrames', Number($event))"
+          >
+            <DqOption
+              v-for="n in overlapFrameOptions"
+              :key="n"
+              :label="overlapFrameLabel(n)"
+              :value="n"
+            />
+          </DqSelect>
+        </div>
+      </div>
+    </template>
+
+    <!-- Episode: flat fields only (workspace card is already the surface) -->
+    <template v-else-if="mode === 'episode'">
+      <div class="lv-ep-settings">
+        <div class="lv-ep-settings__row lv-ep-settings__row--title">
+          <div class="lv-ep-settings__field">
+            <label class="lv-ep-settings__label" :for="ids.title">{{ titleLabel }}</label>
             <DqInput
               :id="ids.title"
               :model-value="title"
-              size="sm"
-              class="lv-settings-bar__control"
-              :placeholder="$tt('video.longVideoProjectTitlePh')"
+              class="lv-ep-settings__control"
+              :placeholder="titlePlaceholder"
               @update:model-value="$emit('update:title', $event)"
             />
           </div>
+          <div class="lv-ep-settings__field lv-ep-settings__field--duration">
+            <label class="lv-ep-settings__label" :for="ids.duration">{{ $tt('video.longVideoTargetDuration') }}</label>
+            <div class="lv-ep-settings__duration">
+              <DqInput
+                :id="ids.duration"
+                type="number"
+                class="lv-ep-settings__control"
+                :model-value="String(targetDurationSec ?? 60)"
+                @update:model-value="$emit('update:targetDurationSec', Number($event) || 60)"
+              />
+              <span class="lv-ep-settings__unit">{{ $tt('video.longVideoSecondsUnit') }}</span>
+            </div>
+          </div>
+        </div>
 
-          <div class="lv-settings-bar__field">
-            <label class="lv-settings-bar__label" :for="ids.keyframe">{{ $tt('video.longVideoKeyframeModel') }}</label>
+        <div class="lv-ep-settings__row lv-ep-settings__row--models">
+          <div class="lv-ep-settings__field">
+            <label class="lv-ep-settings__label" :for="ids.keyframe">{{ $tt('video.longVideoKeyframeModel') }}</label>
             <DqSelect
               :id="ids.keyframe"
               :model-value="keyframeModel"
-              size="sm"
-              variant="ghost"
-              class="lv-settings-bar__control"
-              :title="$tt('video.longVideoKeyframeModelHint')"
+              class="lv-ep-settings__control"
               @update:model-value="$emit('update:keyframeModel', $event)"
             >
-              <DqOption v-for="optId in keyframeModelOptions" :key="optId" :label="modelLabel(optId)" :value="optId" />
-            </DqSelect>
-          </div>
-
-          <div class="lv-settings-bar__field">
-            <label class="lv-settings-bar__label" :for="ids.segment">{{ $tt('video.longVideoSegmentModel') }}</label>
-            <DqSelect
-              :id="ids.segment"
-              :model-value="segmentModel"
-              size="sm"
-              variant="ghost"
-              class="lv-settings-bar__control"
-              :title="$tt('video.longVideoSegmentModelHint')"
-              @update:model-value="$emit('update:segmentModel', $event)"
-            >
-              <DqOption v-for="optId in segmentModelOptions" :key="optId" :label="modelLabel(optId)" :value="optId" />
-            </DqSelect>
-          </div>
-
-          <div class="lv-settings-bar__field">
-            <label class="lv-settings-bar__label" :for="ids.size">{{ $tt('video.longVideoOutputSize') }}</label>
-            <DqSelect
-              :id="ids.size"
-              :model-value="outputSize"
-              size="sm"
-              variant="ghost"
-              class="lv-settings-bar__control"
-              :title="$tt('video.longVideoOutputSizeHint')"
-              @update:model-value="$emit('update:outputSize', $event)"
-            >
               <DqOption
-                v-for="opt in outputSizeOptions"
-                :key="opt.value"
-                :label="formatResolutionOptionLabel(opt)"
-                :value="opt.value"
+                v-for="optId in keyframeSelectOptions"
+                :key="optId"
+                :label="modelLabel(optId) || optId"
+                :value="optId"
               />
             </DqSelect>
           </div>
-
-          <div class="lv-settings-bar__field">
-            <label class="lv-settings-bar__label" :for="ids.overlap">{{ $tt('video.longVideoOverlapFrames') }}</label>
+          <div class="lv-ep-settings__field">
+            <label class="lv-ep-settings__label" :for="ids.segment">{{ $tt('video.longVideoSegmentModel') }}</label>
             <DqSelect
-              :id="ids.overlap"
-              :model-value="overlapFrames"
-              size="sm"
-              variant="ghost"
-              class="lv-settings-bar__control"
-              :title="$tt('video.longVideoOverlapFramesHint')"
-              @update:model-value="$emit('update:overlapFrames', Number($event))"
+              :id="ids.segment"
+              :model-value="segmentModel"
+              class="lv-ep-settings__control"
+              @update:model-value="$emit('update:segmentModel', $event)"
             >
               <DqOption
-                v-for="n in overlapFrameOptions"
-                :key="n"
-                :label="overlapFrameLabel(n)"
-                :value="n"
+                v-for="optId in segmentSelectOptions"
+                :key="optId"
+                :label="modelLabel(optId) || optId"
+                :value="optId"
               />
             </DqSelect>
           </div>
         </div>
-        <p v-if="inline && projectId" class="lv-settings-bar__project-id">
-          <span>{{ $tt('video.longVideoProjectIdLabel') }}</span>
-          <code :title="projectId">{{ shortProjectId }}</code>
-          <DqButton size="sm" type="text" @click="copyProjectId">{{ $tt('studio.taskIdCopy') }}</DqButton>
+
+        <p class="lv-ep-settings__meta">
+          <span>
+            {{ $tt('video.longVideoOutputSize') }}
+            {{ lockedOutputSizeLabel }}
+            ·
+            {{ $tt('video.longVideoOverlapFrames') }}
+            {{ overlapFrameLabel(lockedOverlapFrames ?? 4) }}
+          </span>
+          <button
+            v-if="canOpenProjectSettings"
+            type="button"
+            class="lv-ep-settings__meta-link"
+            @click="$emit('open-project-settings')"
+          >
+            {{ $tt('video.longVideoOpenProjectSettings') }}
+          </button>
         </p>
-      </template>
+      </div>
+    </template>
 
-      <template v-else>
-        <DqPrefPane
-          class="settings-grouped-form settings-pref-pane-form settings-pref-pane-form--system lv-settings-pref-pane"
-        >
-          <DqPrefRow :label="$tt('video.longVideoProjectTitle')" stacked>
-            <div class="settings-stacked-control">
-              <DqInput
-                :model-value="title"
-                class="settings-mac-value-control"
-                :placeholder="$tt('video.longVideoProjectTitlePh')"
-                :aria-label="$tt('video.longVideoProjectTitle')"
-                @update:model-value="$emit('update:title', $event)"
-              />
-            </div>
-          </DqPrefRow>
-
-        <DqPrefRow :label="$tt('video.longVideoKeyframeModel')" stacked>
-          <div class="settings-stacked-control">
-            <DqSelect
-              :model-value="keyframeModel"
-              class="settings-mac-value-control"
-              :placeholder="$tt('video.longVideoKeyframeModel')"
-              :aria-label="$tt('video.longVideoKeyframeModel')"
-              @update:model-value="$emit('update:keyframeModel', $event)"
-            >
-              <DqOption v-for="optId in keyframeModelOptions" :key="optId" :label="modelLabel(optId)" :value="optId" />
-            </DqSelect>
-            <p class="settings-form-hint settings-form-hint--below-control">
-              {{ $tt('video.longVideoKeyframeModelHint') }}
-            </p>
+    <!-- Project: same row form as the episode sheet -->
+    <template v-else>
+      <div class="lv-ep-settings">
+        <div class="lv-ep-settings__field">
+          <label class="lv-ep-settings__label" :for="ids.title">{{ titleLabel }}</label>
+          <DqInput
+            :id="ids.title"
+            :model-value="title"
+            class="lv-ep-settings__control"
+            :placeholder="titlePlaceholder"
+            @update:model-value="$emit('update:title', $event)"
+          />
+        </div>
+        <div class="lv-ep-settings__field">
+          <label class="lv-ep-settings__label" :for="ids.duration">{{ $tt('video.longVideoTargetDuration') }}</label>
+          <div class="lv-ep-settings__duration">
+            <DqInput
+              :id="ids.duration"
+              type="number"
+              class="lv-ep-settings__control"
+              :model-value="String(targetDurationSec ?? 60)"
+              @update:model-value="$emit('update:targetDurationSec', Number($event) || 60)"
+            />
+            <span class="lv-ep-settings__unit">{{ $tt('video.longVideoSecondsUnit') }}</span>
           </div>
-        </DqPrefRow>
-
-        <DqPrefRow :label="$tt('video.longVideoSegmentModel')" stacked>
-          <div class="settings-stacked-control">
-            <DqSelect
-              :model-value="segmentModel"
-              class="settings-mac-value-control"
-              :placeholder="$tt('video.longVideoSegmentModel')"
-              :aria-label="$tt('video.longVideoSegmentModel')"
-              @update:model-value="$emit('update:segmentModel', $event)"
-            >
-              <DqOption v-for="optId in segmentModelOptions" :key="optId" :label="modelLabel(optId)" :value="optId" />
-            </DqSelect>
-            <p class="settings-form-hint settings-form-hint--below-control">
-              {{ $tt('video.longVideoSegmentModelHint') }}
-            </p>
-          </div>
-        </DqPrefRow>
-
-        <DqPrefRow :label="$tt('video.longVideoOutputSize')" stacked>
-          <div class="settings-stacked-control">
-            <DqSelect
-              :model-value="outputSize"
-              class="settings-mac-value-control"
-              :placeholder="$tt('video.longVideoOutputSize')"
-              :aria-label="$tt('video.longVideoOutputSize')"
-              @update:model-value="$emit('update:outputSize', $event)"
-            >
-              <DqOption
-                v-for="opt in outputSizeOptions"
-                :key="opt.value"
-                :label="formatResolutionOptionLabel(opt)"
-                :value="opt.value"
-              />
-            </DqSelect>
-            <p class="settings-form-hint settings-form-hint--below-control">
-              {{ $tt('video.longVideoOutputSizeHint') }}
-            </p>
-          </div>
-        </DqPrefRow>
-
-        <DqPrefRow :label="$tt('video.longVideoOverlapFrames')" stacked>
-          <div class="settings-stacked-control">
-            <DqSelect
-              :model-value="overlapFrames"
-              class="settings-mac-value-control"
-              :placeholder="$tt('video.longVideoOverlapFrames')"
-              :aria-label="$tt('video.longVideoOverlapFrames')"
-              @update:model-value="$emit('update:overlapFrames', Number($event))"
-            >
-              <DqOption
-                v-for="n in overlapFrameOptions"
-                :key="n"
-                :label="overlapFrameLabel(n)"
-                :value="n"
-              />
-            </DqSelect>
-            <p class="settings-form-hint settings-form-hint--below-control">
-              {{ $tt('video.longVideoOverlapFramesHint') }}
-            </p>
-          </div>
-        </DqPrefRow>
-
-        </DqPrefPane>
-      </template>
+        </div>
+        <div class="lv-ep-settings__field">
+          <label class="lv-ep-settings__label" :for="ids.keyframe">{{ $tt('video.longVideoKeyframeModel') }}</label>
+          <DqSelect
+            :id="ids.keyframe"
+            :model-value="keyframeModel"
+            class="lv-ep-settings__control"
+            @update:model-value="$emit('update:keyframeModel', $event)"
+          >
+            <DqOption v-for="optId in keyframeSelectOptions" :key="optId" :label="modelLabel(optId) || optId" :value="optId" />
+          </DqSelect>
+        </div>
+        <div class="lv-ep-settings__field">
+          <label class="lv-ep-settings__label" :for="ids.segment">{{ $tt('video.longVideoSegmentModel') }}</label>
+          <DqSelect
+            :id="ids.segment"
+            :model-value="segmentModel"
+            class="lv-ep-settings__control"
+            @update:model-value="$emit('update:segmentModel', $event)"
+          >
+            <DqOption v-for="optId in segmentSelectOptions" :key="optId" :label="modelLabel(optId) || optId" :value="optId" />
+          </DqSelect>
+        </div>
+        <div class="lv-ep-settings__field">
+          <label class="lv-ep-settings__label" :for="ids.size">{{ $tt('video.longVideoOutputSize') }}</label>
+          <DqSelect
+            :id="ids.size"
+            :model-value="outputSize"
+            class="lv-ep-settings__control"
+            @update:model-value="$emit('update:outputSize', $event)"
+          >
+            <DqOption
+              v-for="opt in sizeSelectOptions"
+              :key="opt.value"
+              :label="formatResolutionOptionLabel(opt)"
+              :value="opt.value"
+            />
+          </DqSelect>
+        </div>
+        <div class="lv-ep-settings__field">
+          <label class="lv-ep-settings__label" :for="ids.overlap">{{ $tt('video.longVideoOverlapFrames') }}</label>
+          <DqSelect
+            :id="ids.overlap"
+            :model-value="overlapFrames"
+            class="lv-ep-settings__control"
+            @update:model-value="$emit('update:overlapFrames', Number($event))"
+          >
+            <DqOption v-for="n in overlapFrameOptions" :key="n" :label="overlapFrameLabel(n)" :value="n" />
+          </DqSelect>
+        </div>
+        <div class="lv-ep-settings__field">
+          <label class="lv-ep-settings__label" :for="ids.chain">{{ $tt('video.longVideoChainMode') }}</label>
+          <DqSelect
+            :id="ids.chain"
+            :model-value="chainMode"
+            class="lv-ep-settings__control"
+            @update:model-value="$emit('update:chainMode', $event)"
+          >
+            <DqOption value="keyframe_only" :label="$tt('video.longVideoChainKeyframe')" />
+            <DqOption value="last_frame" :label="$tt('video.longVideoChainLastFrame')" />
+            <DqOption value="first_last" :label="$tt('video.longVideoChainFirstLast')" />
+            <DqOption value="reference_r2v" :label="$tt('video.longVideoChainReferenceR2v')" />
+          </DqSelect>
+        </div>
+        <div class="lv-ep-settings__field lv-ep-settings__field--top">
+          <label class="lv-ep-settings__label" :for="ids.style">{{ $tt('video.longVideoProjectStyleLabel') }}</label>
+          <textarea
+            :id="ids.style"
+            class="dq-input dq-input--textarea lv-ep-settings__control"
+            :value="styleAnchor"
+            rows="3"
+            @input="$emit('update:styleAnchor', ($event.target as HTMLTextAreaElement).value)"
+          />
+        </div>
+      </div>
+    </template>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { toast } from '@/utils/feedback';
-import { shortActivityId } from '@/utils/longVideoActivity';
 import { formatResolutionOptionLabel, type ResolutionSizeOption } from '@/utils/registryParamSchema';
 
 const props = withDefaults(
   defineProps<{
+    mode?: 'episode' | 'project';
     title: string;
     keyframeModel: string;
     segmentModel: string;
@@ -210,8 +297,22 @@ const props = withDefaults(
     modelLabel: (id: string) => string;
     inline?: boolean;
     projectId?: string;
+    targetDurationSec?: number;
+    lockedOutputSize?: string;
+    lockedOverlapFrames?: number;
+    canOpenProjectSettings?: boolean;
+    chainMode?: string;
+    styleAnchor?: string;
   }>(),
-  { inline: false },
+  {
+    inline: false,
+    mode: 'project',
+    targetDurationSec: 60,
+    lockedOverlapFrames: 4,
+    canOpenProjectSettings: false,
+    chainMode: 'keyframe_only',
+    styleAnchor: '',
+  },
 );
 
 defineEmits<{
@@ -220,11 +321,13 @@ defineEmits<{
   (e: 'update:segmentModel', value: string): void;
   (e: 'update:outputSize', value: string): void;
   (e: 'update:overlapFrames', value: number): void;
+  (e: 'update:targetDurationSec', value: number): void;
+  (e: 'update:chainMode', value: string): void;
+  (e: 'update:styleAnchor', value: string): void;
+  (e: 'open-project-settings'): void;
 }>();
 
 const { t: $tt } = useI18n();
-
-const shortProjectId = computed(() => shortActivityId(props.projectId ?? ''));
 
 const overlapFrameOptions = [0, 4, 8, 16] as const;
 
@@ -234,20 +337,185 @@ const ids = {
   segment: 'lv-settings-segment',
   size: 'lv-settings-size',
   overlap: 'lv-settings-overlap',
+  duration: 'lv-settings-duration',
+  chain: 'lv-settings-chain',
+  style: 'lv-settings-style',
 } as const;
+
+const panelAriaLabel = computed(() =>
+  props.mode === 'episode'
+    ? $tt('video.longVideoEditorTabSettings')
+    : $tt('video.longVideoSeriesTabSettings'),
+);
+
+const titleLabel = computed(() =>
+  props.mode === 'episode'
+    ? $tt('video.longVideoProjectTitle')
+    : $tt('video.longVideoSeriesNameLabel'),
+);
+
+const titlePlaceholder = computed(() =>
+  props.mode === 'episode'
+    ? $tt('video.longVideoProjectTitlePh')
+    : $tt('video.longVideoSeriesNamePh'),
+);
+
+const lockedOutputSizeLabel = computed(() => {
+  const raw = (props.lockedOutputSize || props.outputSize || '').trim();
+  if (!raw) return '—';
+  const opt = props.outputSizeOptions.find((o) => o.value === raw);
+  return opt ? formatResolutionOptionLabel(opt) : raw.replace(/x/i, '×');
+});
+
+/** Keep current value selectable even if registry list is sparse / stale. */
+const keyframeSelectOptions = computed(() => {
+  const opts = [...props.keyframeModelOptions];
+  const cur = props.keyframeModel?.trim();
+  if (cur && !opts.includes(cur)) opts.unshift(cur);
+  return opts;
+});
+
+const sizeSelectOptions = computed(() => {
+  const opts = [...props.outputSizeOptions];
+  const cur = props.outputSize?.trim();
+  if (cur && !opts.some((o) => o.value === cur)) {
+    opts.unshift({ label: cur.replace(/x/i, '×'), value: cur });
+  }
+  return opts;
+});
+
+const segmentSelectOptions = computed(() => {
+  const opts = [...props.segmentModelOptions];
+  const cur = props.segmentModel?.trim();
+  if (cur && !opts.includes(cur)) opts.unshift(cur);
+  return opts;
+});
 
 function overlapFrameLabel(n: number): string {
   return $tt('video.longVideoOverlapFramesOption', { n });
 }
+</script>
 
-async function copyProjectId() {
-  const id = (props.projectId ?? '').trim();
-  if (!id) return;
-  try {
-    await navigator.clipboard.writeText(id);
-    toast.success($tt('studio.taskIdCopied'));
-  } catch {
-    toast.error($tt('studio.error', { msg: 'clipboard' }));
+<style scoped>
+.lv-settings--episode {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  align-self: stretch;
+}
+
+.lv-ep-settings {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.lv-ep-settings__row {
+  display: grid;
+  grid-template-columns: 7.5em minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px 0;
+  border-bottom: 0.5px solid var(--dq-border-subtle);
+}
+
+.lv-ep-settings__row--title,
+.lv-ep-settings__row--models {
+  grid-template-columns: 7.5em minmax(0, 1fr);
+}
+
+.lv-ep-settings__row--title {
+  display: contents;
+}
+
+.lv-ep-settings__row--models {
+  display: contents;
+}
+
+.lv-ep-settings__row--title > .lv-ep-settings__field,
+.lv-ep-settings__row--models > .lv-ep-settings__field,
+.lv-ep-settings > .lv-ep-settings__field {
+  display: grid;
+  grid-template-columns: 7.5em minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 0.5px solid var(--dq-border-subtle);
+}
+
+.lv-ep-settings__field--top {
+  align-items: start;
+}
+
+.lv-ep-settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lv-ep-settings__label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--dq-label-secondary);
+}
+
+.lv-ep-settings__control {
+  width: 100%;
+  min-width: 0;
+}
+
+.lv-ep-settings__control :deep(.dq-select__trigger),
+.lv-ep-settings__control.dq-input {
+  min-height: 36px;
+}
+
+.lv-ep-settings__duration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 160px;
+}
+
+.lv-ep-settings__unit {
+  font-size: 13px;
+  color: var(--dq-label-secondary);
+  flex-shrink: 0;
+}
+
+.lv-ep-settings__meta {
+  margin: 0;
+  padding-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--dq-label-tertiary);
+}
+
+.lv-ep-settings__meta-link {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dq-accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.lv-ep-settings__meta-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .lv-ep-settings__row--title > .lv-ep-settings__field,
+  .lv-ep-settings__row--models > .lv-ep-settings__field,
+  .lv-ep-settings > .lv-ep-settings__field {
+    grid-template-columns: 1fr;
   }
 }
-</script>
+</style>

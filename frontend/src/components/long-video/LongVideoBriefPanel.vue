@@ -30,15 +30,14 @@
             :placeholder="$tt('video.longVideoScriptInputPlaceholder')"
             @input="onScriptInput"
           />
-          <div class="lv-script-studio__parse-params">
-            <span class="lv-script-studio__parse-params-label">{{ $tt('video.longVideoScriptParseParams') }}</span>
-            <label class="lv-script-studio__parse-duration">
-              <span class="lv-script-studio__parse-duration-label">{{ $tt('video.longVideoScriptParseLlm') }}</span>
+          <div class="lv-script-studio__parse-params" role="group" :aria-label="$tt('video.longVideoScriptParseParams')">
+            <label class="lv-script-studio__parse-field">
+              <span class="lv-script-studio__parse-field-label">{{ $tt('video.longVideoScriptParseLlm') }}</span>
               <DqSelect
                 :model-value="scriptParseLlmModel"
                 size="sm"
                 variant="ghost"
-                class="lv-script-studio__parse-duration-select lv-script-studio__parse-llm-select"
+                class="lv-script-studio__parse-field-select lv-script-studio__parse-llm-select"
                 :title="$tt('video.longVideoScriptParseLlmHint')"
                 @update:model-value="onScriptParseLlmChange"
               >
@@ -50,45 +49,44 @@
                 />
               </DqSelect>
             </label>
-            <label class="lv-script-studio__parse-duration">
-              <span class="lv-script-studio__parse-duration-label">{{ $tt('video.longVideoTargetDuration') }}</span>
-              <DqSelect
-                :model-value="targetDurationSec"
-                size="sm"
-                variant="ghost"
-                class="lv-script-studio__parse-duration-select"
-                :title="$tt('video.longVideoTargetDurationHint')"
-                @update:model-value="onDurationChange"
-              >
-                <DqOption
-                  v-for="sec in durationChoices"
-                  :key="sec"
-                  :label="$tt('video.longVideoTargetDurationSec', { sec })"
-                  :value="sec"
-                />
-              </DqSelect>
-            </label>
-            <span class="lv-script-studio__parse-chip">
-              {{ $tt('video.longVideoStoryboardShotEstimate', { n: estimatedShots }) }}
-            </span>
-            <label class="lv-script-studio__parse-duration">
-              <span class="lv-script-studio__parse-duration-label">{{ $tt('video.longVideoSegmentDuration') }}</span>
-              <DqSelect
-                :model-value="segmentDurationSec"
-                size="sm"
-                variant="ghost"
-                class="lv-script-studio__parse-duration-select"
-                :title="$tt('video.longVideoSegmentDurationHint')"
-                @update:model-value="onSegmentDurationChange"
-              >
-                <DqOption
-                  v-for="sec in segmentDurationChoices"
-                  :key="sec"
-                  :label="$tt('video.longVideoSegmentDurationSec', { sec })"
-                  :value="sec"
-                />
-              </DqSelect>
-            </label>
+            <div class="lv-script-studio__parse-durations" role="group">
+              <label class="lv-script-studio__parse-field">
+                <span class="lv-script-studio__parse-field-label">{{ $tt('video.longVideoTargetDuration') }}</span>
+                <DqSelect
+                  :model-value="targetDurationSelectValue"
+                  size="sm"
+                  variant="ghost"
+                  class="lv-script-studio__parse-field-select"
+                  :title="$tt('video.longVideoTargetDurationHint')"
+                  @update:model-value="onDurationChange"
+                >
+                  <DqOption
+                    v-for="sec in durationChoices"
+                    :key="sec"
+                    :label="$tt('video.longVideoTargetDurationSec', { sec })"
+                    :value="sec"
+                  />
+                </DqSelect>
+              </label>
+              <label class="lv-script-studio__parse-field">
+                <span class="lv-script-studio__parse-field-label">{{ $tt('video.longVideoSegmentDuration') }}</span>
+                <DqSelect
+                  :model-value="segmentDurationSelectValue"
+                  size="sm"
+                  variant="ghost"
+                  class="lv-script-studio__parse-field-select"
+                  :title="$tt('video.longVideoSegmentDurationHint')"
+                  @update:model-value="onSegmentDurationChange"
+                >
+                  <DqOption
+                    v-for="sec in segmentDurationChoices"
+                    :key="sec"
+                    :label="$tt('video.longVideoSegmentDurationSec', { sec })"
+                    :value="sec"
+                  />
+                </DqSelect>
+              </label>
+            </div>
             <span
               v-if="scriptParsed && sceneBeats.length"
               class="lv-script-studio__parse-chip"
@@ -187,7 +185,13 @@
           :closable="false"
           class="lv-script-studio__parse-error"
           :title="parseError"
-        />
+        >
+          <div v-if="canResumePipeline" class="lv-script-studio__parse-blocked-actions">
+            <DqButton size="sm" type="primary" :loading="parseLoading" :disabled="parseLoading" @click="emit('resume-pipeline')">
+              {{ $tt('video.longVideoPipeResumeFrom', { stage: resumeStageLabel }) }}
+            </DqButton>
+          </div>
+        </DqAlert>
         <DqAlert
           v-if="qualityNotices.length"
           type="warning"
@@ -199,7 +203,27 @@
             <li v-for="(item, idx) in qualityNotices" :key="idx">{{ item }}</li>
           </ul>
         </DqAlert>
-        <template v-if="!scriptParsed">
+        <LongVideoScriptPipelineWorkbench
+          v-if="scriptPipeline"
+          ref="pipelineWorkbenchRef"
+          class="lv-script-studio__pipeline"
+          :pipeline="scriptPipeline"
+          :approving="pipelineApproving"
+          :generating-shots="generatingStoryboard"
+          :repairing="pipelineRepairing"
+          :applying-repair="pipelineApplyingRepair"
+          :busy="parseLoading"
+          @approve-facts="emit('approve-facts')"
+          @approve-shots="emit('approve-shots')"
+          @generate-shots="emit('generate-shots')"
+          @resume="emit('resume-pipeline')"
+          @rerun-stage="emit('rerun-stage', $event)"
+          @repair-preview="emit('repair-preview', $event)"
+          @apply-repair="emit('apply-repair', $event)"
+          @discard-repair="emit('discard-repair')"
+        />
+
+        <template v-else-if="!scriptParsed">
           <div class="lv-script-studio__empty">
             <div class="lv-script-studio__empty-icon" aria-hidden="true" />
             <h3 class="lv-script-studio__empty-title">{{ $tt('video.longVideoScriptInsightsEmpty') }}</h3>
@@ -402,8 +426,14 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { $mn } from '@/utils/i18n';
 import { toast } from '@/utils/feedback';
+import { api } from '@/utils/api';
 import { useRegistryStore } from '@/stores/registry';
-import type { LongVideoChapterAnalysis, LongVideoChapterScene, LongVideoCharacter } from '@/types';
+import type {
+  LongVideoChapterAnalysis,
+  LongVideoChapterScene,
+  LongVideoCharacter,
+  ScriptPipeline,
+} from '@/types';
 import {
   composeSceneBeat,
   parseCharacterLookBody,
@@ -414,7 +444,9 @@ import {
 } from '@/utils/longVideoSceneBeat';
 import { allocateShotDurations } from '@/utils/longVideoProject';
 import { suggestScriptExpand } from '@/utils/llmMessages';
+import { resumeStageFromPipeline } from '@/utils/scriptPipeline';
 import LongVideoParseRunBar from './LongVideoParseRunBar.vue';
+import LongVideoScriptPipelineWorkbench from './LongVideoScriptPipelineWorkbench.vue';
 
 type ScriptInsightTab = 'synopsis' | 'scenes' | 'cast';
 
@@ -441,6 +473,10 @@ const props = defineProps<{
   parseBlockedReason?: string;
   projectId?: string;
   parsedShotCount?: number;
+  scriptPipeline?: ScriptPipeline | null;
+  pipelineApproving?: boolean;
+  pipelineRepairing?: boolean;
+  pipelineApplyingRepair?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -457,38 +493,108 @@ const emit = defineEmits<{
   (e: 'regenerate-beat', beatIndex: number): void;
   (e: 'clear-parse-blocked'): void;
   (e: 'go-to-cast'): void;
+  (e: 'approve-facts'): void;
+  (e: 'approve-shots'): void;
+  (e: 'generate-shots'): void;
+  (e: 'resume-pipeline'): void;
+  (e: 'rerun-stage', payload: { stage: string; sceneId?: string }): void;
+  (e: 'repair-preview', payload: { findingIds: string[]; userNote: string }): void;
+  (e: 'apply-repair', pipeline: ScriptPipeline): void;
+  (e: 'discard-repair'): void;
 }>();
 
 const { t: $tt, locale } = useI18n();
+
+const pipelineWorkbenchRef = ref<{
+  setRepairPreview?: (patches: import('@/types').ScriptRepairPatch[], pipe: ScriptPipeline) => void;
+  discardPreview?: () => void;
+} | null>(null);
+
+defineExpose({
+  setRepairPreview(patches: import('@/types').ScriptRepairPatch[], pipe: ScriptPipeline) {
+    pipelineWorkbenchRef.value?.setRepairPreview?.(patches, pipe);
+  },
+  discardRepairPreview() {
+    pipelineWorkbenchRef.value?.discardPreview?.();
+  },
+});
 const registryStore = useRegistryStore();
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const insightTab = ref<ScriptInsightTab>('scenes');
+const llmCatalog = ref<Array<{ value: string; label: string }>>([]);
+const llmDefaultModel = ref('');
 
 onMounted(() => {
   void registryStore.load();
+  void loadLlmModels();
 });
 
-function hasLlmChatAction(actions: unknown): boolean {
-  if (!actions || typeof actions !== 'object') return false;
-  const row = actions as Record<string, unknown>;
-  return row.chat != null || row.enhance != null;
+async function loadLlmModels() {
+  try {
+    const data = await api.settings.listLlmModels();
+    llmCatalog.value = (data.items || []).map((m) => {
+      const ref = m.ref || (m.provider_id ? `${m.provider_id}/${m.id}` : m.id);
+      const label = m.provider_label
+        ? `${m.provider_label} / ${m.label || m.id}`
+        : (m.label || m.id);
+      return { value: ref, label };
+    });
+    llmDefaultModel.value = data.default_model || '';
+  } catch {
+    llmCatalog.value = [];
+  }
 }
 
 const llmModelOptions = computed(() => {
+  if (llmCatalog.value.length) return llmCatalog.value;
+  // Fallback: Make registry LLM rows when settings catalog is empty.
   const models = registryStore.registry?.models || {};
   return Object.entries(models)
-    .filter(([, cfg]) => cfg.media === 'llm' && cfg.category === 'llm_models' && hasLlmChatAction(cfg.actions))
+    .filter(([, cfg]) => {
+      const row = cfg as { media?: string; category?: string; actions?: Record<string, unknown> };
+      if (row.media !== 'llm' || row.category !== 'llm_models') return false;
+      const actions = row.actions;
+      return Boolean(actions && (actions.chat != null || actions.enhance != null));
+    })
     .map(([id, cfg]) => ({
       value: id,
-      label: $mn(cfg, id),
+      label: $mn(cfg as Parameters<typeof $mn>[0], id),
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
 });
 
-const durationChoices = [30, 45, 60, 90, 120] as const;
-const segmentDurationChoices = [3, 5, 8] as const;
+const durationChoices = [45, 60, 90, 120] as const;
+const segmentDurationChoices = [4, 5, 8] as const;
 
-const parseLoading = computed(() => Boolean(props.parsing) || Boolean(props.generatingStoryboard));
+function nearestChoice(value: number, choices: readonly number[], fallback: number): number {
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  if (choices.includes(value)) return value;
+  let best = choices[0] ?? fallback;
+  let bestDist = Math.abs(best - value);
+  for (const c of choices) {
+    const d = Math.abs(c - value);
+    if (d < bestDist) {
+      best = c;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+const targetDurationSelectValue = computed(() =>
+  nearestChoice(props.targetDurationSec, durationChoices, 60),
+);
+const segmentDurationSelectValue = computed(() =>
+  nearestChoice(props.segmentDurationSec, segmentDurationChoices, 5),
+);
+
+const parseLoading = computed(() =>
+  Boolean(props.parsing)
+  || Boolean(props.generatingStoryboard)
+  || Boolean(props.pipelineApproving)
+  || Boolean(props.pipelineRepairing)
+  || Boolean(props.pipelineApplyingRepair),
+);
 const parseProgressPhase = computed(() => props.parseProgressPhase?.trim() || '');
 const parseProgressMessage = computed(() => props.parseProgressMessage?.trim() || '');
 
@@ -566,6 +672,8 @@ const parsing = computed(() => Boolean(props.parsing));
 const parseError = computed(() => props.parseError?.trim() || '');
 const parseBlocked = computed(() => Boolean(props.parseBlocked));
 const parseBlockedReason = computed(() => props.parseBlockedReason?.trim() || '');
+const resumeStageLabel = computed(() => resumeStageFromPipeline(props.scriptPipeline) || '');
+const canResumePipeline = computed(() => Boolean(resumeStageLabel.value));
 
 const qualityNotices = computed(() => {
   const issues = props.chapterAnalysis?.quality_issues ?? [];
@@ -590,12 +698,6 @@ const totalLookCount = computed(() =>
   characters.value.reduce((sum, ch) => sum + ch.looks.length, 0),
 );
 
-const estimatedShots = computed(() => {
-  const seg = Math.max(1, props.segmentDurationSec || 5);
-  const target = Math.max(seg, props.targetDurationSec || 60);
-  return Math.max(2, Math.round(target / seg));
-});
-
 const sceneBeats = computed((): LongVideoChapterScene[] =>
   props.chapterAnalysis?.scene_beats ?? [],
 );
@@ -605,7 +707,7 @@ const chapterSceneCount = computed(() => sceneBeats.value.length);
 const estimatedTotalDuration = computed(() => {
   const seg = Math.max(1, props.segmentDurationSec || 5);
   const target = Math.max(seg, props.targetDurationSec || 60);
-  const count = chapterSceneCount.value || estimatedShots.value;
+  const count = Math.max(2, chapterSceneCount.value);
   const beatTexts = sceneBeats.value.map((s) => s.beat);
   return allocateShotDurations({
     sceneCount: count,
@@ -746,10 +848,11 @@ function onScriptParseLlmChange(value: number | string) {
 
 const scriptParseLlmModel = computed(() => {
   const saved = props.scriptParseLlmModel?.trim();
-  if (saved) return saved;
-  const preferred = 'qwen3.6-27b';
-  if (llmModelOptions.value.some((o) => o.value === preferred)) return preferred;
-  return llmModelOptions.value[0]?.value ?? '';
+  const opts = llmModelOptions.value;
+  if (saved && opts.some((o) => o.value === saved)) return saved;
+  const preferred = llmDefaultModel.value;
+  if (preferred && opts.some((o) => o.value === preferred)) return preferred;
+  return opts[0]?.value ?? '';
 });
 
 function onSceneTitleInput(index: number, event: Event) {
@@ -907,37 +1010,39 @@ async function onFileSelected(event: Event) {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px 14px;
+  gap: 8px 18px;
   flex-shrink: 0;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--dq-fill-control) 45%, transparent);
-  border: 0.5px solid var(--dq-border-subtle);
+  padding: 6px 0;
 }
 
-.lv-script-studio__parse-params-label {
+.lv-script-studio__parse-durations {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 14px;
+  min-width: 0;
+}
+
+.lv-script-studio__parse-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lv-script-studio__parse-field-label {
   font-size: var(--dq-font-size-caption);
-  font-weight: 650;
-  letter-spacing: var(--dq-tracking-wider);
-  text-transform: uppercase;
   color: var(--dq-label-tertiary);
   white-space: nowrap;
 }
 
-.lv-script-studio__parse-duration {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.lv-script-studio__parse-field-select {
+  min-width: 88px;
 }
 
-.lv-script-studio__parse-duration-label {
-  font-size: var(--dq-font-size-caption);
-  color: var(--dq-label-secondary);
-  white-space: nowrap;
-}
-
-.lv-script-studio__parse-duration-select {
-  min-width: 96px;
+.lv-script-studio__parse-llm-select {
+  min-width: 160px;
+  max-width: min(280px, 42vw);
 }
 
 .lv-script-studio__parse-chip {
@@ -1032,11 +1137,6 @@ async function onFileSelected(event: Event) {
   background: color-mix(in srgb, var(--dq-accent) 55%, var(--dq-border-subtle));
 }
 
-.lv-script-studio__parse-params-note {
-  font-size: var(--dq-font-size-caption);
-  color: var(--dq-label-tertiary);
-}
-
 .lv-script-studio__composer-foot {
   display: flex;
   align-items: center;
@@ -1086,12 +1186,20 @@ async function onFileSelected(event: Event) {
 
 .lv-script-studio__insights {
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   padding: 16px 18px 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   background: color-mix(in srgb, var(--dq-surface-elevated) 35%, transparent);
+  color: var(--dq-label-primary);
+}
+
+.lv-script-studio__pipeline {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .lv-script-studio__insights-parsed {

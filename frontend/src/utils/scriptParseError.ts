@@ -1,5 +1,7 @@
 /** Normalize script-parse SSE / HTTP errors for Long Video UI. */
 
+import type { ScriptPipeline } from '@/types';
+
 export type ScriptParseQualityIssue = {
   code?: string;
   message: string;
@@ -10,11 +12,19 @@ export type ScriptParseQualityIssue = {
 
 export class ScriptParseError extends Error {
   qualityIssues: ScriptParseQualityIssue[];
+  stage?: string;
+  scriptPipeline?: ScriptPipeline | null;
 
-  constructor(message: string, qualityIssues: ScriptParseQualityIssue[] = []) {
+  constructor(
+    message: string,
+    qualityIssues: ScriptParseQualityIssue[] = [],
+    opts?: { stage?: string; scriptPipeline?: ScriptPipeline | null },
+  ) {
     super(message);
     this.name = 'ScriptParseError';
     this.qualityIssues = qualityIssues;
+    this.stage = opts?.stage;
+    this.scriptPipeline = opts?.scriptPipeline ?? null;
   }
 }
 

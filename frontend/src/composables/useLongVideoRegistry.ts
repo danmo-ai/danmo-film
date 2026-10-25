@@ -85,13 +85,13 @@ export function useLongVideoRegistry() {
     };
   });
 
-  const supported = computed(() => profile.value != null && profile.value.keyframe_models.length > 0);
-
   function listImageCreateModelIds(): string[] {
     const reg = registryStore.registry?.models ?? {};
     return Object.keys(reg).filter((id) => {
       const m = reg[id] as RegistryModelRow;
-      return m?.media === 'image' && Boolean(m.actions?.create);
+      if (!m) return false;
+      if (m.media === 'image') return m.actions?.create !== false;
+      return Boolean(m.actions?.create);
     });
   }
 
@@ -99,7 +99,9 @@ export function useLongVideoRegistry() {
     const reg = registryStore.registry?.models ?? {};
     return Object.keys(reg).filter((id) => {
       const m = reg[id] as RegistryModelRow;
-      return m?.media === 'video' && Boolean(m.actions?.animate);
+      if (!m) return false;
+      if (m.media === 'video') return m.actions?.animate !== false;
+      return Boolean(m.actions?.animate);
     });
   }
 
@@ -124,7 +126,7 @@ export function useLongVideoRegistry() {
 
   function durationOptions(maxSec?: number): { label: string; value: number }[] {
     const max = maxSec ?? profile.value?.max_target_duration_sec ?? 120;
-    const opts = [30, 60, 90, 120].filter((s) => s <= max);
+    const opts = [45, 60, 90, 120].filter((s) => s <= max);
     if (!opts.length) opts.push(30);
     return opts.map((value) => ({ value, label: `${value}s` }));
   }
@@ -156,7 +158,6 @@ export function useLongVideoRegistry() {
 
   return {
     profile,
-    supported,
     modelLabel,
     durationOptions,
     modelParameters,

@@ -26,6 +26,15 @@ export interface GalleryGroup {
   metadata: Record<string, unknown>;
 }
 
+/** Global versioned character/scene library row (Film SoR, not fas_* bytes). */
+export interface LibraryEntityVersion {
+  entity_id: string;
+  version: number;
+  kind: 'character' | 'scene' | string;
+  definition: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface AssetRow {
   id: string;
   path?: string;
@@ -113,7 +122,6 @@ export interface SettingsData {
 
 export type PageKey =
   | 'image_create'
-  | 'video_create'
   | 'avatar_create'
   | 'long_video_create'
   | 'audio_create'
@@ -277,15 +285,46 @@ export interface LongVideoCharacterLook {
   portrait_prompt?: string;
 }
 
-export type LongVideoEditorTab = 'settings' | 'script' | 'cast' | 'scenes' | 'storyboard';
+export type LongVideoEditorTab =
+  | 'settings'
+  | 'script'
+  | 'cast'
+  | 'scenes'
+  | 'storyboard'
+  | 'delivery';
 
 export type LongVideoInspectorTab = 'frame' | 'clip';
 
+/** Narrative / production role in the cast (not segment_role). */
+export type LongVideoCastRole = 'protagonist' | 'supporting' | 'extra';
+
+/**
+ * Stable identity across looks. Outfit/hair/props live on looks[];
+ * face/body baseline belongs here (visual_identity).
+ */
 export interface LongVideoCharacter {
   id: string;
   name: string;
   looks: LongVideoCharacterLook[];
   default_look_id: string;
+  role?: LongVideoCastRole;
+  aliases?: string[];
+  /** Age for T2I, e.g. "20s" / "约28". */
+  age_range?: string;
+  /** Presentation for T2I (not legal sex). */
+  gender_presentation?: string;
+  /** One-line job / relationship baseline. */
+  identity_baseline?: string;
+  /** Face / build / permanent marks — no episode wardrobe. */
+  visual_identity?: string;
+  /** Observable speech manner (register + catchphrase). */
+  voice_manner?: string;
+  /** Optional acting notes (pressure habits, etc.). */
+  performance_notes?: string;
+  /** @deprecated Prefer identity_baseline / visual_identity. */
+  identity_notes?: string;
+  library_entity_id?: string;
+  library_version?: number;
 }
 
 export interface LongVideoSceneLook {
@@ -300,6 +339,19 @@ export interface LongVideoSceneLook {
   environment_prompt?: string;
 }
 
+export interface LongVideoCharacterRelation {
+  from_id: string;
+  to_id: string;
+  label: string;
+}
+
+export interface LongVideoProp {
+  id: string;
+  name: string;
+  reference_asset_id?: string;
+  holder_character_id?: string;
+}
+
 export interface LongVideoScene {
   id: string;
   name: string;
@@ -308,6 +360,10 @@ export interface LongVideoScene {
   spatial_layout_json?: Record<string, unknown>;
   grounding_panorama_asset_id?: string;
   grounding_depth_asset_id?: string;
+  time_of_day?: string;
+  weather?: string;
+  library_entity_id?: string;
+  library_version?: number;
 }
 
 export interface LongVideoShotSceneLook {
@@ -383,6 +439,12 @@ export interface LongVideoShotState {
   narrative_beat_index?: number;
   shot_size?: string;
   is_establishing_empty?: boolean;
+  /** Extracted tail frame from previous segment (last_frame chain). */
+  start_frame_asset_id?: string;
+  prev_tail_frame_asset_id?: string;
+  asset_revision?: Record<string, number>;
+  generation_model?: string;
+  generation_seed?: number;
 }
 
 export type LongVideoSelection =
@@ -402,6 +464,262 @@ export interface LongVideoChapterScene {
   order: number;
   title?: string;
   beat: string;
+}
+
+export type ScriptReviewStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'needs_revision'
+  | 'obsolete';
+
+export interface ScriptEvidence {
+  script_version?: string;
+  scene_id?: string;
+  source_start_line?: number;
+  source_end_line?: number;
+  quote?: string;
+}
+
+export interface ScriptSceneIndexEntry {
+  scene_id: string;
+  source_scene_number?: string;
+  heading: string;
+  int_ext?: string;
+  location_text?: string;
+  story_time?: string;
+  source_start_line: number;
+  source_end_line: number;
+  source_hash: string;
+  synopsis?: string;
+  text?: string;
+}
+
+export interface ScriptBreakdownElement {
+  element_id: string;
+  category: string;
+  name: string;
+  basis: string;
+  evidence?: ScriptEvidence;
+  continuity_states?: string[];
+  review_status?: ScriptReviewStatus;
+}
+
+export interface ScriptSceneBreakdown {
+  artifact_id: string;
+  scene_id: string;
+  heading?: string;
+  int_ext?: string;
+  story_time?: string;
+  cast_present?: string[];
+  mentioned_not_present?: string[];
+  elements?: ScriptBreakdownElement[];
+  review_questions?: string[];
+  review_status?: ScriptReviewStatus;
+}
+
+export interface ScriptSceneBeat {
+  beat_id: string;
+  source_event: string;
+  beat_type?: string;
+  effect?: string;
+  source_start_line?: number;
+  source_end_line?: number;
+  interpretive?: boolean;
+}
+
+export interface ScriptSceneAnalysis {
+  artifact_id: string;
+  scene_id: string;
+  dramatic_function?: string;
+  beats?: ScriptSceneBeat[];
+  entry_state?: string;
+  exit_state?: string;
+  deletability?: string;
+  confidence?: string;
+  open_questions?: string[];
+  review_status?: ScriptReviewStatus;
+}
+
+export interface ScriptSceneArtifact {
+  scene_id: string;
+  breakdown?: ScriptSceneBreakdown;
+  analysis?: ScriptSceneAnalysis;
+  review_status?: ScriptReviewStatus;
+}
+
+export interface ScriptContinuityIssue {
+  issue_id: string;
+  severity: string;
+  action?: string;
+  scene_id?: string;
+  field_path?: string;
+  problem: string;
+  evidence_quote?: string;
+  repair_instruction?: string;
+  status?: string;
+}
+
+export interface ScriptContinuityReport {
+  artifact_id: string;
+  merge_suggestions?: string[];
+  issues?: ScriptContinuityIssue[];
+  cast_matrix?: Record<string, string[]>;
+  prop_matrix?: Record<string, string[]>;
+  review_status?: ScriptReviewStatus;
+}
+
+export interface ScriptShotListItem {
+  shot_id: string;
+  scene_id: string;
+  source_beat_ids?: string[];
+  shot_size?: string;
+  camera_movement?: string;
+  visual_action?: string;
+  dialogue?: string;
+  duration_sec?: number;
+  continuity_notes?: string;
+  characters_on_screen?: string[];
+  review_status?: ScriptReviewStatus;
+}
+
+export interface ScriptGenerationPackage {
+  package_id: string;
+  shot_id: string;
+  scene_id?: string;
+  keyframe_prompt?: string;
+  video_prompt?: string;
+  negative_prompt?: string;
+  start_visual?: string;
+  end_visual?: string;
+  review_items?: string[];
+  review_status?: ScriptReviewStatus;
+}
+
+export interface ScriptAuditIssue {
+  issue_id: string;
+  severity: string;
+  action?: string;
+  artifact_id?: string;
+  field_path?: string;
+  problem: string;
+  evidence_quote?: string;
+  repair_instruction?: string;
+  status?: string;
+}
+
+export interface ScriptAuditReport {
+  artifact_id: string;
+  issues?: ScriptAuditIssue[];
+  review_status?: ScriptReviewStatus;
+}
+
+export type ScriptRepairAction =
+  | 'fill_field'
+  | 'fix_value'
+  | 'add_element'
+  | 'remove'
+  | 'clamp_ref';
+
+/** Deterministic lint finding (separate from LLM continuity/audit). */
+export interface ScriptRuleFinding {
+  finding_id: string;
+  source: 'rule';
+  severity: string;
+  action: ScriptRepairAction | string;
+  artifact_id?: string;
+  scene_id?: string;
+  field_path?: string;
+  problem: string;
+  repair_instruction?: string;
+  evidence_quote?: string;
+  source_start_line?: number;
+  source_end_line?: number;
+  suggested_value?: unknown;
+  needs_llm: boolean;
+  status?: string;
+}
+
+export interface ScriptRepairPatch {
+  finding_id: string;
+  artifact_id?: string;
+  field_path?: string;
+  action?: string;
+  before?: unknown;
+  after?: unknown;
+  applied_locally: boolean;
+  note?: string;
+}
+
+export interface ScriptWorkflowState {
+  stage: string;
+  status: string;
+  awaiting_review?: string;
+  facts_approved: boolean;
+  shots_approved: boolean;
+  error?: string;
+}
+
+export interface ScriptEntityRegistry {
+  characters?: Array<{
+    character_id: string;
+    name: string;
+    aliases?: string[];
+    role?: string;
+    look_body?: string;
+    review_status?: ScriptReviewStatus;
+  }>;
+  locations?: Array<{
+    location_id: string;
+    name: string;
+    body?: string;
+    review_status?: ScriptReviewStatus;
+  }>;
+  props?: Array<{
+    element_id: string;
+    name: string;
+    category?: string;
+    scene_ids?: string[];
+    review_status?: ScriptReviewStatus;
+  }>;
+}
+
+/** Multi-stage script breakdown SoR (replaces opaque script_artifact). */
+export interface ScriptPipeline {
+  schema_version: string;
+  script_id: string;
+  version_id: string;
+  source_hash: string;
+  locale?: string;
+  title?: string;
+  source_document?: {
+    text: string;
+    numbered_text: string;
+    lines: string[];
+    uploaded_at?: string;
+  };
+  scene_index?: ScriptSceneIndexEntry[];
+  story_map?: {
+    genre?: string;
+    logline: string;
+    mood?: string;
+    style_anchor?: string;
+    core_conflict?: string;
+    hypotheses?: string[];
+    open_questions?: string[];
+    review_status?: ScriptReviewStatus;
+  };
+  entity_registry?: ScriptEntityRegistry;
+  scene_artifacts?: Record<string, ScriptSceneArtifact>;
+  continuity_report?: ScriptContinuityReport;
+  shot_list?: ScriptShotListItem[];
+  generation_packages?: ScriptGenerationPackage[];
+  audit_report?: ScriptAuditReport;
+  rule_findings?: ScriptRuleFinding[];
+  workflow: ScriptWorkflowState;
+  scene_change_set?: Array<{ scene_id: string; status: string }>;
+  parse_run_id?: string;
+  llm_calls?: number;
 }
 
 export interface LongVideoChapterAnalysis {
@@ -473,8 +791,123 @@ export interface LongVideoParseHistoryEntry {
   provenance_by_shot_id: Record<string, KeyframeT2iProvenance>;
 }
 
+/** Field-level patch for a character look within an episode (undefined = inherit). */
+export interface LongVideoCharacterLookVariant {
+  look_id: string;
+  label?: string;
+  body?: string;
+  vision_description?: string | null;
+  reference_asset_id?: string | null;
+  lora_id?: string | null;
+  portrait_prompt?: string | null;
+  /** When true, this look exists only on the episode (derived from base_look_id). */
+  episode_only?: boolean;
+  base_look_id?: string;
+}
+
+export interface LongVideoCharacterVariant {
+  character_id: string;
+  name?: string;
+  role?: LongVideoCastRole | null;
+  aliases?: string[] | null;
+  age_range?: string | null;
+  gender_presentation?: string | null;
+  identity_baseline?: string | null;
+  visual_identity?: string | null;
+  voice_manner?: string | null;
+  performance_notes?: string | null;
+  default_look_id?: string;
+  looks?: LongVideoCharacterLookVariant[];
+  /** Whole character exists only on this episode until promoted to series. */
+  episode_only?: boolean;
+  scope?: 'episode' | 'series';
+  base_version?: number;
+}
+
+export interface LongVideoSceneLookVariant {
+  look_id: string;
+  label?: string;
+  body?: string;
+  vision_description?: string | null;
+  reference_asset_id?: string | null;
+  environment_prompt?: string | null;
+  episode_only?: boolean;
+  base_look_id?: string;
+}
+
+export interface LongVideoSceneVariant {
+  scene_id: string;
+  name?: string;
+  default_look_id?: string;
+  looks?: LongVideoSceneLookVariant[];
+  spatial_layout_json?: Record<string, unknown> | null;
+  grounding_panorama_asset_id?: string | null;
+  grounding_depth_asset_id?: string | null;
+  /** Whole scene exists only on this episode until promoted to series. */
+  episode_only?: boolean;
+  scope?: 'episode' | 'series';
+  base_version?: number;
+}
+
+/** Shared series (剧集) state — characters/scenes live here for multi-episode reuse. */
+export interface LongVideoSeriesState {
+  version: 1;
+  revision?: number;
+  characters: LongVideoCharacter[];
+  scenes: LongVideoScene[];
+  style_anchor?: string;
+  keyframe_model?: string;
+  segment_video_model?: string;
+  segment_duration_sec?: number;
+  overlap_frames?: number;
+  chain_mode?: LongVideoChainMode;
+  output_size?: string;
+  target_duration_sec?: number;
+  portrait_model?: string;
+  script_parse_llm_model?: string;
+  relations?: LongVideoCharacterRelation[];
+  props?: LongVideoProp[];
+  episode_continuity?: Record<
+    string,
+    {
+      prev_summary?: string;
+      ending_summary?: string;
+    }
+  >;
+}
+
+export interface LongVideoSeriesSummary {
+  id: string;
+  title: string;
+  episode_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LongVideoSeriesDetail {
+  id: string;
+  title: string;
+  state: LongVideoSeriesState;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LongVideoSeriesEpisodeSummary {
+  series_id: string;
+  episode_project_id: string;
+  episode_number: number;
+  title: string;
+  shot_count: number;
+  keyframe_count: number;
+  segment_count: number;
+  has_final: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LongVideoProjectState {
   version: 1 | 2;
+  revision?: number;
   strategy: 'segmented_i2v' | 'latent_extend';
   /** Main editor tab: script source → cast roster → scene roster → storyboard timeline. */
   editor_tab?: LongVideoEditorTab;
@@ -486,12 +919,20 @@ export interface LongVideoProjectState {
   chapter_text?: string;
   chapter_title?: string;
   chapter_analysis?: LongVideoChapterAnalysis;
+  /** Multi-stage script parse SoR. */
+  script_pipeline?: ScriptPipeline;
   target_duration_sec: number;
   /** Plan-round [Anchor] cached from last storyboard expand; reference only. */
   character_anchor?: string;
-  /** Structured cast roster from storyboard expand (multi-look per character). */
+  /**
+   * Episode-local cast roster (standalone projects) or legacy cache.
+   * When series_id is set, prefer series state + character_variants.
+   */
   characters?: LongVideoCharacter[];
-  /** Structured scene / location roster (multi-variant per place). */
+  /**
+   * Episode-local scene roster (standalone projects) or legacy cache.
+   * When series_id is set, prefer series state + scene_variants.
+   */
   scenes?: LongVideoScene[];
   style_anchor?: string;
   character_lora_id?: string;
@@ -511,6 +952,17 @@ export interface LongVideoProjectState {
   final_asset_id?: string;
   /** Server-side project row id (long_video_projects table). */
   project_id?: string;
+  /** Parent series id when this project is an episode. */
+  series_id?: string;
+  /** 1-based episode number within the series. */
+  episode_number?: number;
+  /** Notes bridging from prior episode narrative. */
+  continuity_notes?: string;
+  opening_from_prev?: string;
+  /** Per-character field patches over series shared cast. */
+  character_variants?: Record<string, LongVideoCharacterVariant>;
+  /** Per-scene field patches over series shared scenes. */
+  scene_variants?: Record<string, LongVideoSceneVariant>;
   selection?: LongVideoSelection;
 }
 

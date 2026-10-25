@@ -8,11 +8,17 @@ import type {
   FirstFrameStrategy,
   GalleryGroup,
   GalleryItem,
+  LibraryEntityVersion,
+  ModelConfig,
   LongVideoChainMode,
   LongVideoFlfMode,
   LongVideoProjectDetail,
   LongVideoProjectState,
   LongVideoProjectSummary,
+  LongVideoSeriesDetail,
+  LongVideoSeriesEpisodeSummary,
+  LongVideoSeriesState,
+  LongVideoSeriesSummary,
   LongVideoSegmentRole,
   LongVideoShotCastLook,
   LongVideoShotSceneLook,
@@ -20,10 +26,116 @@ import type {
   QueueState,
   RegistryData,
   SettingsData,
+  ScriptPipeline,
   SystemInfo,
 } from '@/types';
 import { DQ_STORAGE, getItem } from '@/utils/storage';
 import { ScriptParseError, type ScriptParseQualityIssue } from '@/utils/scriptParseError';
+
+export type FilmProviderBlock = {
+  protocol?: string;
+  provider?: string;
+  base_url?: string;
+  api_key?: string;
+  model?: string;
+};
+
+export type FilmLlmModel = {
+  id: string;
+  label?: string;
+  enabled?: boolean;
+  /** Protocol dialect (thinking wire shape), not sampling. */
+  reasoning_dialect?: string;
+};
+
+export type FilmLlmModelParams = {
+  context_window?: number;
+  max_output_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  /** Reasoning level value: off|low|medium|high|max (dialect only encodes it). */
+  thinking_mode?: string;
+  thinking_budget?: number;
+};
+
+export type FilmLlmProfile = {
+  id: string;
+  label?: string;
+  protocol: string;
+  base_url: string;
+  api_key?: string;
+  auth_style?: string;
+  enabled?: boolean;
+  default_dialect?: string;
+  preset_id?: string;
+  models: FilmLlmModel[];
+};
+
+export type FilmEnabledLlmModel = {
+  /** Create-page value: provider_id/model_id */
+  ref: string;
+  /** Bare model id (upstream + llm_model_params key) */
+  id: string;
+  label: string;
+  provider_id: string;
+  provider_label: string;
+  protocol: string;
+  reasoning_dialect?: string;
+  context_window?: number;
+  max_output_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  thinking_mode?: string;
+  thinking_budget?: number;
+};
+
+export type FilmLlmPreset = {
+  id: string;
+  label: string;
+  protocol: string;
+  base_url: string;
+  auth_style?: string;
+  default_dialect?: string;
+  protocol_locked?: boolean;
+  models: Array<{
+    id: string;
+    label?: string;
+    enabled?: boolean;
+    reasoning_dialect?: string;
+    context_window?: number;
+    max_output_tokens?: number;
+  }>;
+};
+
+export type FilmSettingsPayload = {
+  providers: {
+    llm?: FilmProviderBlock;
+    llm_profiles?: FilmLlmProfile[];
+    llm_default_model?: string;
+    llm_default_context_window?: number;
+    llm_default_max_output_tokens?: number;
+    llm_default_temperature?: number;
+    llm_default_top_p?: number;
+    llm_default_thinking_mode?: string;
+    llm_model_params?: Record<string, FilmLlmModelParams>;
+    generation: FilmProviderBlock;
+    volcengine?: FilmProviderBlock;
+    dashscope?: FilmProviderBlock;
+    minimax?: FilmProviderBlock;
+  };
+};
+
+export type FilmSettingsResponse = FilmSettingsPayload & {
+  paths?: Record<string, string>;
+  catalog?: Array<{
+    id: string;
+    kind: string;
+    label: string;
+    protocol?: string;
+    base_url?: string;
+    models?: Array<{ id: string; label?: string; enabled?: boolean }>;
+  }>;
+};
 
 const API_BASE = '';
 
@@ -124,6 +236,20 @@ export type ScriptParseExpandResult = ScriptParseDecomposeResult & {
   }>;
 };
 
+export type ScriptParsePipelineResult = {
+  script_pipeline: ScriptPipeline;
+  characters?: ScriptParseDecomposeResult['characters'];
+  scenes?: ScriptParseDecomposeResult['scenes'];
+  scene_beats?: ScriptParseDecomposeResult['scene_beats'];
+  shots?: LongVideoChapterAnalyzeShot[];
+  synopsis?: string;
+  mood?: string;
+  style_anchor?: string;
+  llm_calls?: number;
+  parse_run_id?: string;
+  project_id?: string;
+};
+
 /** @deprecated use ScriptParseExpandResult */
 export type LongVideoChapterAnalyzeResult = ScriptParseExpandResult;
 
@@ -171,6 +297,59 @@ const client = axios.create({
   },
 });
 
+/** Optimistic revision mismatch (HTTP 409 from Film API). */
+export function isRevisionConflictError(e: unknown): boolean {
+  if (!axios.isAxiosError(e)) return false;
+  return e.response?.status === 409;
+}
+
+/**
+ * Film / cloud providers may return `models` as an array
+ * (`[{ id, label, media, modes }]`); the UI expects a Make-style
+ * `models: Record<id, config>` with `actions.create|animate`.
+ */
+export function normalizeGenerationRegistry(raw: unknown): RegistryData {
+  if (!raw || typeof raw !== 'object') return { models: {} };
+  const data = raw as Record<string, unknown>;
+  const modelsField = data.models;
+  if (modelsField && !Array.isArray(modelsField) && typeof modelsField === 'object') {
+    return data as RegistryData;
+  }
+  const list = Array.isArray(modelsField)
+    ? modelsField
+    : Array.isArray(data.items)
+      ? data.items
+      : [];
+  const models: Record<string, ModelConfig> = {};
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue;
+    const m = row as Record<string, unknown>;
+    const id = String(m.id || '').trim();
+    if (!id) continue;
+    const modes = Array.isArray(m.modes) ? m.modes.map(String) : [];
+    const mediaRaw = String(m.media || '').toLowerCase();
+    const media =
+      mediaRaw === 'image' || mediaRaw === 'video'
+        ? mediaRaw
+        : modes.some((x) => x === 't2i' || x === 'i2i')
+          ? 'image'
+          : 'video';
+    const label = (m.label as string | undefined) || (m.name as string | undefined) || id;
+    models[id] = {
+      ...(m as ModelConfig),
+      name: label,
+      media,
+      actions: {
+        create: media === 'image' || modes.includes('t2i'),
+        animate: media === 'video' || modes.includes('i2v') || modes.includes('t2v') || modes.includes('flf'),
+        edit: modes.includes('i2i') || modes.includes('img2img'),
+      },
+      parameters: (m.parameters as Record<string, unknown>) || {},
+    };
+  }
+  return { ...data, models };
+}
+
 client.interceptors.request.use((config) => {
   const lang = getItem(DQ_STORAGE.LANG) || 'zh';
   config.headers = config.headers ?? {};
@@ -213,6 +392,7 @@ async function parseScriptParseStream<T>(
   path: string,
   body: Record<string, unknown>,
   onProgress?: (phase: string, message: string) => void,
+  onCheckpoint?: (data: T) => void,
 ): Promise<T> {
   const lang = getItem(DQ_STORAGE.LANG) || 'zh';
   const res = await fetch(path, {
@@ -248,27 +428,43 @@ async function parseScriptParseStream<T>(
     const chunks = buffer.split('\n\n');
     buffer = chunks.pop() ?? '';
     for (const chunk of chunks) {
-      const line = chunk.split('\n').find((l) => l.startsWith('data: '));
-      if (!line) continue;
-      const payload = JSON.parse(line.slice(6)) as {
+      const lines = chunk.split('\n');
+      const eventLine = lines.find((l) => l.startsWith('event: '));
+      const dataLine = lines.find((l) => l.startsWith('data: '));
+      if (!dataLine) continue;
+      const sseEvent = eventLine ? eventLine.slice(7).trim() : '';
+      const payload = JSON.parse(dataLine.slice(6)) as {
         event?: string;
+        stage?: string;
         phase?: string;
+        scene_id?: string;
         message?: string;
         pass?: string;
         detail?: string;
+        error?: string;
         quality_issues?: ScriptParseQualityIssue[];
+        script_pipeline?: import('@/types').ScriptPipeline;
         data?: T;
-      };
-      if (payload.event === 'progress' && payload.phase) {
-        onProgress?.(payload.phase, payload.message ?? payload.phase);
-      } else if (payload.event === 'review_retry') {
+      } & T;
+      const ev = sseEvent || payload.event || '';
+      if (ev === 'progress') {
+        const phase = payload.stage || payload.phase || 'progress';
+        const msg = payload.message ?? phase;
+        onProgress?.(phase, payload.scene_id ? `${payload.scene_id}: ${msg}` : msg);
+      } else if (ev === 'checkpoint') {
+        onCheckpoint?.((payload.data ?? payload) as T);
+      } else if (ev === 'review_retry') {
         onProgress?.('review_retry', payload.pass ?? payload.message ?? 'review_retry');
-      } else if (payload.event === 'result' && payload.data) {
-        finalResult = payload.data;
-      } else if (payload.event === 'error') {
+      } else if (ev === 'result') {
+        finalResult = (payload.data ?? payload) as T;
+      } else if (ev === 'error') {
         throw new ScriptParseError(
-          payload.detail || 'script parse failed',
+          payload.error || payload.detail || 'script parse failed',
           payload.quality_issues ?? [],
+          {
+            stage: payload.stage,
+            scriptPipeline: payload.script_pipeline,
+          },
         );
       }
     }
@@ -530,6 +726,50 @@ export const api = {
   },
 
   settings: {
+    async getFilmSettings(): Promise<FilmSettingsResponse> {
+      const response = await client.get('/api/settings');
+      return response.data;
+    },
+
+    async updateFilmSettings(settings: FilmSettingsPayload): Promise<{
+      success?: boolean;
+      restart_required?: boolean;
+    }> {
+      const response = await client.put('/api/settings', settings);
+      return response.data;
+    },
+
+    async providerStatus(): Promise<unknown> {
+      const response = await client.get('/api/providers/status');
+      return response.data;
+    },
+
+    async listLlmModels(): Promise<{
+      items: FilmEnabledLlmModel[];
+      default_model: string;
+    }> {
+      const response = await client.get('/api/settings/llm/models');
+      return response.data;
+    },
+
+    async fetchLlmProviderModels(body: {
+      profile_id?: string;
+      protocol?: string;
+      base_url?: string;
+      api_key?: string;
+    }): Promise<{ items: Array<{ id: string; label: string }> }> {
+      const response = await client.post('/api/settings/llm/fetch-models', body);
+      return response.data;
+    },
+
+    async listLlmPresets(): Promise<{
+      items: FilmLlmPreset[];
+      reasoning_dialects: Array<{ id: string; label: string }>;
+    }> {
+      const response = await client.get('/api/settings/llm/presets');
+      return response.data;
+    },
+
     async getSettings(): Promise<SettingsData> {
       const response = await client.get('/api/settings');
       return response.data;
@@ -738,6 +978,13 @@ export const api = {
     async getAssetLineage(assetId: string): Promise<unknown> {
       const response = await client.get(`/api/assets/${encodeURIComponent(assetId)}/lineage`);
       return response.data;
+    },
+
+    async extractLastFrame(assetId: string): Promise<AssetRow> {
+      const response = await client.post(
+        `/api/assets/${encodeURIComponent(assetId)}/extract-last-frame`,
+      );
+      return response.data as AssetRow;
     },
 
     async createImageGeneration(body: Record<string, unknown>): Promise<unknown> {
@@ -1001,6 +1248,77 @@ export const api = {
       );
     },
 
+    async scriptParseProcessStream(
+      body: {
+        script_text: string;
+        title?: string;
+        locale?: string;
+        model?: string;
+        long_video_project_id?: string;
+        existing_pipeline?: ScriptPipeline;
+        stop_at?: string;
+        until_shots?: boolean;
+        target_duration_sec?: number;
+        segment_duration_sec?: number;
+        max_clip_sec?: number;
+        only_scene_ids?: string[];
+      },
+      onProgress?: (phase: string, message: string) => void,
+      onCheckpoint?: (data: ScriptParsePipelineResult) => void,
+    ): Promise<ScriptParsePipelineResult> {
+      return parseScriptParseStream<ScriptParsePipelineResult>(
+        '/api/script-parse/process/stream',
+        body,
+        onProgress,
+        onCheckpoint,
+      );
+    },
+
+    async scriptParseApproveFacts(pipeline: ScriptPipeline): Promise<ScriptParsePipelineResult> {
+      const res = await client.post('/api/script-parse/approve/facts', { pipeline });
+      return res.data as ScriptParsePipelineResult;
+    },
+
+    async scriptParseApproveShots(pipeline: ScriptPipeline): Promise<ScriptParsePipelineResult> {
+      const res = await client.post('/api/script-parse/approve/shots', { pipeline });
+      return res.data as ScriptParsePipelineResult;
+    },
+
+    async scriptParseRepairPreview(body: {
+      pipeline: ScriptPipeline;
+      finding_ids: string[];
+      user_note?: string;
+      model?: string;
+    }): Promise<ScriptParsePipelineResult & { patches?: import('@/types').ScriptRepairPatch[]; llm_calls?: number }> {
+      const res = await client.post('/api/script-parse/repair-preview', body);
+      return res.data as ScriptParsePipelineResult & {
+        patches?: import('@/types').ScriptRepairPatch[];
+        llm_calls?: number;
+      };
+    },
+
+    async scriptParseApplyPatches(pipeline: ScriptPipeline): Promise<ScriptParsePipelineResult> {
+      const res = await client.post('/api/script-parse/apply-patches', { pipeline });
+      return res.data as ScriptParsePipelineResult;
+    },
+
+    async scriptParseRerun(
+      stage: string,
+      body: {
+        existing_pipeline: ScriptPipeline;
+        model?: string;
+        locale?: string;
+        long_video_project_id?: string;
+        only_scene_ids?: string[];
+        target_duration_sec?: number;
+        segment_duration_sec?: number;
+        max_clip_sec?: number;
+      },
+    ): Promise<ScriptParsePipelineResult> {
+      const res = await client.post(`/api/script-parse/rerun/${encodeURIComponent(stage)}`, body);
+      return res.data as ScriptParsePipelineResult;
+    },
+
     async longVideoChapterAnalyzeStream(
       body: {
         chapter_text: string;
@@ -1107,7 +1425,7 @@ export const api = {
   registry: {
     async getFull(): Promise<RegistryData> {
       const response = await client.get('/api/registry');
-      return response.data;
+      return normalizeGenerationRegistry(response.data);
     },
   },
 
@@ -1205,6 +1523,84 @@ export const api = {
 
     async deleteProject(projectId: string): Promise<void> {
       await client.delete(`/api/long-video/projects/${encodeURIComponent(projectId)}`);
+    },
+
+    async listSeries(limit = 100): Promise<LongVideoSeriesSummary[]> {
+      const response = await client.get('/api/long-video/series', { params: { limit } });
+      return (response.data?.items || []) as LongVideoSeriesSummary[];
+    },
+
+    async getSeries(seriesId: string): Promise<LongVideoSeriesDetail> {
+      const response = await client.get(
+        `/api/long-video/series/${encodeURIComponent(seriesId)}`,
+      );
+      return response.data as LongVideoSeriesDetail;
+    },
+
+    async createSeries(body: {
+      title?: string;
+      state?: Partial<LongVideoSeriesState>;
+    }): Promise<LongVideoSeriesDetail> {
+      const response = await client.post('/api/long-video/series', body);
+      return response.data as LongVideoSeriesDetail;
+    },
+
+    async updateSeries(
+      seriesId: string,
+      body: {
+        title?: string;
+        state?: Partial<LongVideoSeriesState>;
+      },
+    ): Promise<LongVideoSeriesDetail> {
+      const response = await client.put(
+        `/api/long-video/series/${encodeURIComponent(seriesId)}`,
+        body,
+      );
+      return response.data as LongVideoSeriesDetail;
+    },
+
+    async deleteSeries(seriesId: string): Promise<void> {
+      await client.delete(`/api/long-video/series/${encodeURIComponent(seriesId)}`);
+    },
+
+    async listSeriesEpisodes(seriesId: string): Promise<LongVideoSeriesEpisodeSummary[]> {
+      const response = await client.get(
+        `/api/long-video/series/${encodeURIComponent(seriesId)}/episodes`,
+      );
+      return (response.data?.items || []) as LongVideoSeriesEpisodeSummary[];
+    },
+
+    async createSeriesEpisode(
+      seriesId: string,
+      body?: {
+        title?: string;
+        episode_number?: number;
+        state?: Partial<LongVideoProjectState>;
+      },
+    ): Promise<{
+      episode: LongVideoSeriesEpisodeSummary;
+      project: LongVideoProjectDetail;
+    }> {
+      const response = await client.post(
+        `/api/long-video/series/${encodeURIComponent(seriesId)}/episodes`,
+        body ?? {},
+      );
+      return response.data;
+    },
+
+    async convertProjectToSeries(
+      projectId: string,
+      body?: { title?: string },
+    ): Promise<{
+      series: LongVideoSeriesDetail;
+      episode: LongVideoSeriesEpisodeSummary;
+      project: LongVideoProjectDetail;
+    }> {
+      const response = await client.post(
+        `/api/long-video/series/from-project/${encodeURIComponent(projectId)}`,
+        body ?? {},
+      );
+      return response.data;
     },
 
     async listProjectActivity(
@@ -1445,6 +1841,77 @@ export const api = {
     }> {
       const response = await client.get('/api/tools/z-image/merge/merged');
       return response.data;
+    },
+  },
+
+  library: {
+    async listCharacters(limit = 100): Promise<LibraryEntityVersion[]> {
+      const response = await client.get('/api/library/characters', { params: { limit } });
+      return (response.data?.items || []) as LibraryEntityVersion[];
+    },
+    async getCharacter(entityId: string, version = 0): Promise<LibraryEntityVersion> {
+      const response = await client.get(
+        `/api/library/characters/${encodeURIComponent(entityId)}`,
+        { params: version > 0 ? { version } : undefined },
+      );
+      return response.data as LibraryEntityVersion;
+    },
+    async createCharacter(definition: Record<string, unknown>): Promise<LibraryEntityVersion> {
+      const response = await client.post('/api/library/characters', { definition });
+      return response.data as LibraryEntityVersion;
+    },
+    async newCharacterVersion(
+      entityId: string,
+      definition: Record<string, unknown>,
+    ): Promise<LibraryEntityVersion> {
+      const response = await client.post(
+        `/api/library/characters/${encodeURIComponent(entityId)}/versions`,
+        { definition },
+      );
+      return response.data as LibraryEntityVersion;
+    },
+    async listCharacterVersions(entityId: string): Promise<LibraryEntityVersion[]> {
+      const response = await client.get(
+        `/api/library/characters/${encodeURIComponent(entityId)}/versions`,
+      );
+      return (response.data?.items || []) as LibraryEntityVersion[];
+    },
+    async deleteCharacter(entityId: string): Promise<void> {
+      await client.delete(`/api/library/characters/${encodeURIComponent(entityId)}`);
+    },
+    async listScenes(limit = 100): Promise<LibraryEntityVersion[]> {
+      const response = await client.get('/api/library/scenes', { params: { limit } });
+      return (response.data?.items || []) as LibraryEntityVersion[];
+    },
+    async getScene(entityId: string, version = 0): Promise<LibraryEntityVersion> {
+      const response = await client.get(
+        `/api/library/scenes/${encodeURIComponent(entityId)}`,
+        { params: version > 0 ? { version } : undefined },
+      );
+      return response.data as LibraryEntityVersion;
+    },
+    async createScene(definition: Record<string, unknown>): Promise<LibraryEntityVersion> {
+      const response = await client.post('/api/library/scenes', { definition });
+      return response.data as LibraryEntityVersion;
+    },
+    async newSceneVersion(
+      entityId: string,
+      definition: Record<string, unknown>,
+    ): Promise<LibraryEntityVersion> {
+      const response = await client.post(
+        `/api/library/scenes/${encodeURIComponent(entityId)}/versions`,
+        { definition },
+      );
+      return response.data as LibraryEntityVersion;
+    },
+    async listSceneVersions(entityId: string): Promise<LibraryEntityVersion[]> {
+      const response = await client.get(
+        `/api/library/scenes/${encodeURIComponent(entityId)}/versions`,
+      );
+      return (response.data?.items || []) as LibraryEntityVersion[];
+    },
+    async deleteScene(entityId: string): Promise<void> {
+      await client.delete(`/api/library/scenes/${encodeURIComponent(entityId)}`);
     },
   },
 

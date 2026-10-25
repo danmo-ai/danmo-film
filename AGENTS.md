@@ -19,13 +19,14 @@ Operational guide for contributors and coding agents.
 
 | Item | Location |
 |------|----------|
-| API entry | `backend/main.py` |
+| API entry | `cmd/danmo-film/main.go` (Go, Gin :7803) |
 | Frontend | `frontend/` (Vite :5803) |
-| Providers | `backend/providers/` (Make / cloud peers) |
-| Film assets | `backend/persistence/film_asset_store.py` + `/api/assets` |
-| Film domain | `backend/film/` |
-| Script-parse LLM | `backend/llm/` |
-| User data | `~/.danmo-film/` |
+| Ports | `core/port/` (`LLMProvider`, `GenerationProvider`) |
+| LLM adapters | `core/adapter/llm/` (OpenAI / Responses / Anthropic / mock) |
+| Video adapters | `core/adapter/gen/` (Make, Volcengine Seedance, DashScope 万相, MiniMax Hailuo) |
+| Film assets | `core/store/sqlite/` + `/api/assets` |
+| Script-parse | `core/service/scriptparse/` |
+| Settings | `~/.danmo-film/config/settings.json` + `/api/settings` |
 | Workspace assets | `{workspace}/assets/` (`fas_*`) |
 | Dev ports | API **7803**, UI **5803** |
 
@@ -33,29 +34,32 @@ Operational guide for contributors and coding agents.
 
 ```
 Film UI / API
-  ├─ /api/assets/*              → FilmAssetStore (SoR)
-  ├─ /api/long-video/*          → projects + assemble (Film ffmpeg)
-  ├─ /api/script-parse/*        → LlmChatProvider (Make or any OpenAI-compatible)
-  └─ /api/images|videos|tasks/* → GenerationProvider peer
+ ├─ /api/assets/*              → FilmAssetStore (SoR)
+ ├─ /api/long-video/*          → projects + assemble (Film ffmpeg)
+ ├─ /api/script-parse/*        → port.LLMProvider (OpenAI-compatible or Anthropic)
+ └─ /api/images|videos|tasks/* → port.GenerationProvider peer
         ├─ stage fas_* inputs to provider for the job only
         ├─ submit create/edit
         └─ ingest result bytes → fas_* (never upload finals back)
 ```
 
+Generation `providers.generation.provider`: `danmo-make` | `volcengine` | `dashscope` | `minimax`. One official async video API per cloud vendor. Fail loud — no silent cross-vendor fallback.
+
 ## Commands
 
 ```bash
-make install
-make install-frontend
-make backend    # :7803
-make frontend   # :5803
+make dev        # API :7803 + Vite :5803 (one-shot)
+make stop
+make backend    # API only
 make health
+make test
 ```
 
 ## Hard rules
 
 1. Fail loud — no silent provider fallbacks.
-2. Do not import Make `backend/engine/families/*` into Film hot paths; use HTTP providers.
+2. Do not import Make engine internals; use HTTP providers.
 3. Make / cloud = clip + LLM APIs only. Film owns assemble, edit timeline, and assets.
-4. Provider `stage_input_file` is ephemeral job staging — not ownership transfer.
+4. Provider `StageInput` is ephemeral job staging — not ownership transfer.
 5. Product name: **Danmo Film** / `danmo-film-*`.
+6. Domain/service code talks only to `core/port`; adapters live under `core/adapter`.

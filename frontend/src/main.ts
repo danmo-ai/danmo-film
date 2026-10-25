@@ -20,6 +20,7 @@ import '@danqing/dq-tokens/dq-agent.css';
 import '@danqing/dq-ui/style.css';
 import '@danqing/dq-shell/style.css';
 import './styles/theme.css';
+import './styles/film-shell.css';
 import '@danqing/dq-tokens/dq-tauri-macos.css';
 
 document.documentElement.classList.add('dq-mac', 'dark');

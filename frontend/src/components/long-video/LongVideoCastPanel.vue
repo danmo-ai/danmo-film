@@ -1,5 +1,56 @@
 <template>
   <section class="lv-cast-workshop lv-section">
+    <div v-if="seriesLinked" class="lv-asset-scope-bar">
+      <span class="lv-asset-scope-bar__label">{{ $tt('video.longVideoAssetEditScope') }}</span>
+      <div class="lv-asset-scope-bar__toggle" role="group" :aria-label="$tt('video.longVideoAssetEditScope')">
+        <button
+          type="button"
+          class="lv-asset-scope-bar__opt"
+          :class="{ 'is-active': assetEditScope === 'episode' }"
+          @click="emit('update:assetEditScope', 'episode')"
+        >
+          {{ $tt('video.longVideoAssetScopeEpisode') }}
+        </button>
+        <button
+          type="button"
+          class="lv-asset-scope-bar__opt"
+          :class="{ 'is-active': assetEditScope === 'series' }"
+          @click="emit('update:assetEditScope', 'series')"
+        >
+          {{ $tt('video.longVideoAssetScopeSeries') }}
+        </button>
+      </div>
+      <span v-if="selectedCharacter?.library_version != null" class="lv-asset-scope-bar__badge">
+        {{ $tt('video.longVideoLibraryVersionBadge', { v: selectedCharacter!.library_version! }) }}
+      </span>
+      <div class="lv-asset-scope-bar__actions">
+        <DqButton
+          v-if="canRestoreFromSeries"
+          size="sm"
+          type="text"
+          @click="emit('restore-series-master', selectedCharacter?.id)"
+        >
+          {{ $tt('video.longVideoRestoreSeriesMaster') }}
+        </DqButton>
+        <DqButton
+          v-if="canPromoteSelectedToSeries"
+          size="sm"
+          type="text"
+          @click="emit('promote-to-series', selectedCharacter!.id)"
+        >
+          {{ $tt('video.longVideoPromoteEntityToSeries') }}
+        </DqButton>
+        <DqButton
+          v-if="assetEditScope === 'series' && showLibraryPublish"
+          size="sm"
+          type="default"
+          :loading="publishingLibrary"
+          @click="emit('publish-library-version', selectedCharacter?.id)"
+        >
+          {{ $tt('video.longVideoPublishLibraryVersion') }}
+        </DqButton>
+      </div>
+    </div>
     <div v-if="scriptSourceLabel || characters.length" class="lv-cast-workshop__source">
       <span v-if="scriptSourceLabel" class="lv-cast-workshop__source-text">{{ scriptSourceLabel }}</span>
       <div class="lv-cast-workshop__source-actions">
@@ -137,6 +188,104 @@
             </DqIconButton>
           </div>
         </header>
+
+        <section class="lv-cast-workshop__identity" :aria-label="$tt('video.longVideoCastIdentitySection')">
+          <div class="lv-cast-workshop__identity-head">
+            <h3 class="lv-cast-workshop__identity-title">{{ $tt('video.longVideoCastIdentitySection') }}</h3>
+            <p
+              v-if="!characterVisualIdentity(selectedCharacter)"
+              class="lv-cast-workshop__identity-hint"
+            >
+              {{ $tt('video.longVideoCastVisualIdentityHint') }}
+            </p>
+          </div>
+          <div class="lv-cast-workshop__identity-grid">
+            <label class="lv-cast-workshop__field">
+              <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastRoleLabel') }}</span>
+              <DqSelect
+                :model-value="selectedCharacter.role || 'supporting'"
+                size="sm"
+                @update:model-value="onCharacterRole(selectedIndex, $event)"
+              >
+                <DqOption :label="$tt('video.longVideoCastRoleProtagonist')" value="protagonist" />
+                <DqOption :label="$tt('video.longVideoCastRoleSupporting')" value="supporting" />
+                <DqOption :label="$tt('video.longVideoCastRoleExtra')" value="extra" />
+              </DqSelect>
+            </label>
+            <label class="lv-cast-workshop__field">
+              <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastAliasesLabel') }}</span>
+              <DqInput
+                :model-value="(selectedCharacter.aliases ?? []).join('、')"
+                size="sm"
+                :placeholder="$tt('video.longVideoCastAliasesPh')"
+                @update:model-value="onCharacterAliases(selectedIndex, $event)"
+              />
+            </label>
+            <label class="lv-cast-workshop__field">
+              <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastAgeRangeLabel') }}</span>
+              <DqInput
+                :model-value="selectedCharacter.age_range || ''"
+                size="sm"
+                :placeholder="$tt('video.longVideoCastAgeRangePh')"
+                @update:model-value="onCharacterField(selectedIndex, 'age_range', $event)"
+              />
+            </label>
+            <label class="lv-cast-workshop__field">
+              <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastGenderLabel') }}</span>
+              <DqInput
+                :model-value="selectedCharacter.gender_presentation || ''"
+                size="sm"
+                :placeholder="$tt('video.longVideoCastGenderPh')"
+                @update:model-value="onCharacterField(selectedIndex, 'gender_presentation', $event)"
+              />
+            </label>
+            <label class="lv-cast-workshop__field lv-cast-workshop__field--wide">
+              <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastBaselineLabel') }}</span>
+              <DqInput
+                :model-value="selectedCharacter.identity_baseline || ''"
+                size="sm"
+                :placeholder="$tt('video.longVideoCastBaselinePh')"
+                @update:model-value="onCharacterField(selectedIndex, 'identity_baseline', $event)"
+              />
+            </label>
+            <label class="lv-cast-workshop__field lv-cast-workshop__field--wide">
+              <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastVisualIdentityLabel') }}</span>
+              <DqInput
+                :model-value="selectedCharacter.visual_identity || selectedCharacter.identity_notes || ''"
+                type="textarea"
+                :rows="2"
+                size="sm"
+                :placeholder="$tt('video.longVideoCastVisualIdentityPh')"
+                @update:model-value="onCharacterField(selectedIndex, 'visual_identity', $event)"
+              />
+            </label>
+            <label class="lv-cast-workshop__field lv-cast-workshop__field--wide">
+              <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastVoiceMannerLabel') }}</span>
+              <DqInput
+                :model-value="selectedCharacter.voice_manner || ''"
+                size="sm"
+                :placeholder="$tt('video.longVideoCastVoiceMannerPh')"
+                @update:model-value="onCharacterField(selectedIndex, 'voice_manner', $event)"
+              />
+            </label>
+            <label class="lv-cast-workshop__field lv-cast-workshop__field--wide">
+              <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastPerformanceNotesLabel') }}</span>
+              <DqInput
+                :model-value="selectedCharacter.performance_notes || ''"
+                type="textarea"
+                :rows="2"
+                size="sm"
+                :placeholder="$tt('video.longVideoCastPerformanceNotesPh')"
+                @update:model-value="onCharacterField(selectedIndex, 'performance_notes', $event)"
+              />
+            </label>
+          </div>
+        </section>
+
+        <div class="lv-cast-workshop__looks-head">
+          <h3 class="lv-cast-workshop__looks-title">{{ $tt('video.longVideoCastLooksSection') }}</h3>
+          <p class="lv-cast-workshop__looks-hint">{{ $tt('video.longVideoCastLooksSectionHint') }}</p>
+        </div>
 
         <div class="lv-cast-workshop__looks">
           <article
@@ -317,8 +466,9 @@ import { useI18n } from 'vue-i18n';
 import { Close, Delete, Loading, PictureFilled, Plus } from '@danqing/dq-shell';
 import LongVideoEntityRelatedTasks from './LongVideoEntityRelatedTasks.vue';
 import { api } from '@/utils/api';
-import type { LongVideoCharacter } from '@/types';
+import type { LongVideoCastRole, LongVideoCharacter } from '@/types';
 import {
+  characterVisualIdentity,
   createCharacterEntry,
   createLookEntry,
   looksMissingPortrait,
@@ -335,10 +485,21 @@ const props = defineProps<{
   portraitGeneratingKey?: string | null;
   visionBackfillKey?: string | null;
   batchGenerating?: boolean;
+  seriesLinked?: boolean;
+  assetEditScope?: 'episode' | 'series';
+  canRestoreFromSeries?: boolean;
+  /** Character ids with episode overrides / episode-only looks. */
+  promotableCharacterIds?: string[];
+  showLibraryPublish?: boolean;
+  publishingLibrary?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'update:characters', value: LongVideoCharacter[]): void;
+  (e: 'update:assetEditScope', value: 'episode' | 'series'): void;
+  (e: 'restore-series-master', characterId?: string): void;
+  (e: 'promote-to-series', characterId: string): void;
+  (e: 'publish-library-version', characterId?: string): void;
   (e: 'generate-portrait', characterIndex: number, lookIndex: number): void;
   (e: 'pick-portrait-gallery', characterIndex: number, lookIndex: number): void;
   (e: 'clear-portrait', characterIndex: number, lookIndex: number): void;
@@ -348,6 +509,9 @@ const emit = defineEmits<{
   (e: 'go-to-storyboard'): void;
   (e: 'import-style-anchor', value: string): void;
 }>();
+
+const seriesLinked = computed(() => Boolean(props.seriesLinked));
+const assetEditScope = computed(() => props.assetEditScope ?? 'episode');
 
 const { t: $tt, locale } = useI18n();
 
@@ -366,6 +530,12 @@ const readyPortraitCount = computed(() =>
 );
 
 const selectedCharacter = computed(() => props.characters[selectedIndex.value] ?? null);
+
+const canPromoteSelectedToSeries = computed(() => {
+  const id = selectedCharacter.value?.id;
+  if (!id || assetEditScope.value !== 'episode') return false;
+  return (props.promotableCharacterIds ?? []).includes(id);
+});
 
 const scriptSourceLabel = computed(() => {
   if (!props.scriptParsed) return '';
@@ -461,6 +631,49 @@ function importFromAnchor() {
 
 function onCharacterName(index: number, name: string) {
   emitCharacters(props.characters.map((c, i) => (i === index ? { ...c, name } : c)));
+}
+
+function onCharacterRole(index: number, value: string | number | boolean) {
+  const role = String(value || 'supporting') as LongVideoCastRole;
+  const nextRole: LongVideoCastRole =
+    role === 'protagonist' || role === 'supporting' || role === 'extra' ? role : 'supporting';
+  emitCharacters(props.characters.map((c, i) => (i === index ? { ...c, role: nextRole } : c)));
+}
+
+function onCharacterAliases(index: number, raw: string) {
+  const aliases = String(raw || '')
+    .split(/[,，、;/|]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  emitCharacters(
+    props.characters.map((c, i) =>
+      i === index ? { ...c, aliases: aliases.length ? aliases : undefined } : c,
+    ),
+  );
+}
+
+function onCharacterField(
+  index: number,
+  key:
+    | 'age_range'
+    | 'gender_presentation'
+    | 'identity_baseline'
+    | 'visual_identity'
+    | 'voice_manner'
+    | 'performance_notes',
+  raw: string,
+) {
+  const trimmed = String(raw || '').trim();
+  emitCharacters(
+    props.characters.map((c, i) => {
+      if (i !== index) return c;
+      const next = { ...c, [key]: trimmed || undefined };
+      if (key === 'visual_identity' && trimmed) {
+        delete next.identity_notes;
+      }
+      return next;
+    }),
+  );
 }
 
 function removeCharacter(index: number) {
@@ -975,6 +1188,61 @@ function removeLook(ci: number, li: number) {
   color: var(--dq-danger);
 }
 
+.lv-cast-workshop__identity {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 0.5px solid var(--dq-border-subtle);
+  background: color-mix(in srgb, var(--dq-fill-control) 35%, transparent);
+}
+
+.lv-cast-workshop__identity-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lv-cast-workshop__identity-title,
+.lv-cast-workshop__looks-title {
+  margin: 0;
+  font-size: var(--dq-font-size-body);
+  font-weight: 650;
+  color: var(--dq-label-primary);
+}
+
+.lv-cast-workshop__identity-hint {
+  margin: 0;
+  font-size: var(--dq-font-size-caption);
+  color: var(--dq-warning);
+  line-height: 1.4;
+}
+
+.lv-cast-workshop__looks-hint {
+  margin: 0;
+  font-size: var(--dq-font-size-caption);
+  color: var(--dq-label-tertiary);
+  line-height: 1.4;
+}
+
+.lv-cast-workshop__identity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.lv-cast-workshop__field--wide {
+  grid-column: 1 / -1;
+}
+
+.lv-cast-workshop__looks-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
 .lv-cast-workshop__looks {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -1245,6 +1513,10 @@ function removeLook(ci: number, li: number) {
   }
 
   .lv-cast-workshop__looks {
+    grid-template-columns: 1fr;
+  }
+
+  .lv-cast-workshop__identity-grid {
     grid-template-columns: 1fr;
   }
 }

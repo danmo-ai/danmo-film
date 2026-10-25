@@ -194,6 +194,62 @@ export function useComposerLlm() {
     }
   }
 
+  async function scriptParseProcess(
+    body: {
+      script_text: string;
+      title?: string;
+      locale?: string;
+      model?: string;
+      long_video_project_id?: string;
+      existing_pipeline?: import('@/types').ScriptPipeline;
+      stop_at?: string;
+      until_shots?: boolean;
+      target_duration_sec?: number;
+      segment_duration_sec?: number;
+      max_clip_sec?: number;
+      only_scene_ids?: string[];
+    },
+    opts?: {
+      quietSuccess?: boolean;
+      onProgress?: (phase: string, message: string) => void;
+      onCheckpoint?: (data: import('@/utils/api').ScriptParsePipelineResult) => void;
+      onError?: (msg: string, err?: unknown) => void;
+      forShots?: boolean;
+    },
+  ): Promise<import('@/utils/api').ScriptParsePipelineResult | null> {
+    if (opts?.forShots) isStoryboardGenerating.value = true;
+    else isChapterAnalyzing.value = true;
+    try {
+      const result = await api.gen.scriptParseProcessStream(
+        body,
+        opts?.onProgress,
+        opts?.onCheckpoint,
+      );
+      if (!opts?.quietSuccess) {
+        toast.success(
+          opts?.forShots
+            ? $tt('video.longVideoScriptGenerateStoryboardDone')
+            : $tt('video.longVideoPipeParseOk'),
+        );
+      }
+      return result;
+    } catch (e) {
+      const msg = (e as { response?: { data?: { detail?: string } }; message?: string })?.response?.data?.detail
+        || (e as Error).message
+        || String(e);
+      opts?.onError?.(msg, e);
+      toast.error(
+        opts?.forShots
+          ? $tt('video.longVideoScriptGenerateStoryboardFailed', { msg })
+          : $tt('video.longVideoChapterAnalyzeFailed', { msg }),
+      );
+      return null;
+    } finally {
+      if (opts?.forShots) isStoryboardGenerating.value = false;
+      else isChapterAnalyzing.value = false;
+    }
+  }
+
   /** Decompose + expand (legacy one-shot). */
   async function analyzeLongVideoChapter(
     body: {
@@ -245,6 +301,7 @@ export function useComposerLlm() {
     scriptParseDecompose,
     scriptParseExpand,
     scriptParseExpandBeat,
+    scriptParseProcess,
     analyzeLongVideoChapter,
   };
 }

@@ -12,10 +12,12 @@ import type {
   LongVideoSceneLook,
   LongVideoSegmentRole,
   LongVideoSelection,
+  LongVideoSeriesState,
   LongVideoShotCastLook,
   LongVideoShotSceneLook,
   LongVideoShotState,
 } from '@/types';
+import { effectiveEpisodeRoster, workspaceRosterRevisions } from '@/utils/longVideoSeries';
 import { parseCharacterLookBody, parseSceneBeat } from '@/utils/longVideoSceneBeat';
 
 export function resolveLongVideoLocale(locale: string): 'zh' | 'en' {
@@ -168,7 +170,7 @@ export function effectiveShotChainMode(
 ): LongVideoChainMode {
   const mode = shot?.chain_mode;
   if (mode === 'first_last' || shot?.flf_mode === 'first_last') {
-    return 'keyframe_only';
+    return 'first_last';
   }
   if (mode === 'keyframe_only' || mode === 'last_frame' || mode === 'reference_r2v') {
     return mode;
@@ -561,7 +563,18 @@ export function shotNeedsEndFrame(shot: LongVideoShotState | undefined): boolean
   return shot.segment_role === 'pre_anchor' && shot.flf_mode === 'first_last';
 }
 
-/** I2V submit placeholder: last_frame chain replaces source on the server from prev segment. */
+/** Resolved tail-frame asset for last_frame chain (no keyframe fallback). */
+export function lastFrameChainStartAssetId(
+  shot: LongVideoShotState,
+  prevShot: LongVideoShotState | undefined,
+): string | undefined {
+  const fromShot = (shot.start_frame_asset_id ?? shot.prev_tail_frame_asset_id ?? '').trim();
+  if (fromShot) return fromShot;
+  const fromPrev = (prevShot?.end_frame_asset_id ?? '').trim();
+  return fromPrev || undefined;
+}
+
+/** I2V submit: last_frame uses extracted tail frame only (not prior keyframes). */
 export function segmentI2vSourceAssetId(
   lv: { shots: LongVideoShotState[]; chain_mode?: LongVideoChainMode },
   index: number,
@@ -569,12 +582,10 @@ export function segmentI2vSourceAssetId(
   const shot = lv.shots[index];
   if (!shot) return undefined;
   const chainMode = effectiveShotChainMode(shot, lv.chain_mode ?? 'keyframe_only');
-  if (chainMode === 'last_frame' && index > 0 && lv.shots[index - 1]?.segment_asset_id) {
-    return (
-      lv.shots[index - 1]?.keyframe_asset_id ||
-      lv.shots[0]?.keyframe_asset_id ||
-      shot.keyframe_asset_id
-    );
+  if (chainMode === 'last_frame' && index > 0) {
+    const prev = lv.shots[index - 1];
+    if (!prev?.segment_asset_id) return undefined;
+    return lastFrameChainStartAssetId(shot, prev);
   }
   if (shot.start_frame_mode === 'anchor_link') {
     const anchor = findFaceAnchorShot(lv.shots, shot);
@@ -604,10 +615,16 @@ export function canGenerateSegmentShot(
   if (!shot || !shotVideoPrompt(shot)) return false;
   const chainMode = effectiveShotChainMode(shot, lv.chain_mode ?? 'keyframe_only');
   if (chainMode === 'last_frame' && index > 0) {
-    return Boolean(lv.shots[index - 1]?.segment_asset_id);
+    const prev = lv.shots[index - 1];
+    if (!prev?.segment_asset_id) return false;
+    return Boolean(lastFrameChainStartAssetId(shot, prev));
   }
   if (shot.start_frame_mode === 'anchor_link') {
     return Boolean(findFaceAnchorShot(lv.shots, shot)?.keyframe_asset_id);
+  }
+  if (chainMode === 'first_last') {
+    if (!shot.keyframe_asset_id) return false;
+    return Boolean(segmentI2vEndFrameAssetId(lv, index) ?? shot.end_frame_asset_id);
   }
   if (chainMode === 'reference_r2v') {
     if (!shot.keyframe_asset_id) return false;
@@ -619,6 +636,348 @@ export function canGenerateSegmentShot(
     return refs.length > 0;
   }
   return Boolean(shot.keyframe_asset_id);
+}
+
+export type ProductionBlockerCode =
+  | 'missing_cast_reference'
+  | 'missing_scene_reference'
+  | 'missing_keyframe'
+  | 'segment_failed'
+  | 'last_frame_missing_tail'
+  | 'first_last_missing_end_frame'
+  | 'reference_r2v_missing_refs';
+
+export function productionBlockers(
+  lv: { shots: LongVideoShotState[]; chain_mode?: LongVideoChainMode; characters?: LongVideoCharacter[]; scenes?: LongVideoScene[] },
+  roster: { characters: LongVideoCharacter[]; scenes: LongVideoScene[] },
+): ProductionBlockerCode[] {
+  const codes = new Set<ProductionBlockerCode>();
+  const chars = roster.characters;
+  const scenes = roster.scenes;
+
+  for (const ch of chars) {
+    for (const lk of ch.looks) {
+      if ((lk.body.trim() || ch.name.trim()) && !lk.reference_asset_id) {
+        codes.add('missing_cast_reference');
+        break;
+      }
+    }
+  }
+  for (const sc of scenes) {
+    for (const lk of sc.looks) {
+      if ((lk.body.trim() || sc.name.trim()) && !lk.reference_asset_id) {
+        codes.add('missing_scene_reference');
+        break;
+      }
+    }
+  }
+
+  lv.shots.forEach((shot, index) => {
+    if (shot.status === 'failed') codes.add('segment_failed');
+    const chainMode = effectiveShotChainMode(shot, lv.chain_mode ?? 'keyframe_only');
+    if (shotNeedsKeyframe(shot) && !shot.keyframe_asset_id && shotVideoPrompt(shot)) {
+      codes.add('missing_keyframe');
+    }
+    if (chainMode === 'last_frame' && index > 0 && shotVideoPrompt(shot)) {
+      const prev = lv.shots[index - 1];
+      if (!prev?.segment_asset_id || !lastFrameChainStartAssetId(shot, prev)) {
+        codes.add('last_frame_missing_tail');
+      }
+    }
+    if (chainMode === 'first_last' && shotVideoPrompt(shot)) {
+      if (!shot.keyframe_asset_id) codes.add('missing_keyframe');
+      if (!segmentI2vEndFrameAssetId(lv, index) && !shot.end_frame_asset_id) {
+        codes.add('first_last_missing_end_frame');
+      }
+    }
+    if (chainMode === 'reference_r2v' && shotVideoPrompt(shot)) {
+      if (!shot.keyframe_asset_id) codes.add('missing_keyframe');
+      const refs = collectCastReferenceAssetIdsForShot(
+        lv.characters ?? chars,
+        shot.cast_looks ?? [],
+        shotCastMatchText(shot),
+      );
+      if (!refs.length) codes.add('reference_r2v_missing_refs');
+    }
+  });
+
+  return [...codes];
+}
+
+export function buildWorkspaceSnapshot(
+  episode: LongVideoProjectState,
+  series: LongVideoSeriesState | null | undefined,
+): {
+  episode: LongVideoProjectState;
+  series: LongVideoSeriesState | null;
+  characters: LongVideoCharacter[];
+  scenes: LongVideoScene[];
+  style_anchor: string;
+  revisions: Record<string, number>;
+} {
+  const roster = effectiveEpisodeRoster(episode, series ?? null);
+  return {
+    episode,
+    series: series ?? null,
+    characters: roster.characters,
+    scenes: roster.scenes,
+    style_anchor: (series?.style_anchor ?? episode.style_anchor ?? '').trim(),
+    revisions: workspaceRosterRevisions(episode, series ?? null),
+  };
+}
+
+export function collectKeyframeReferenceBindings(
+  characters: LongVideoCharacter[],
+  castLooks: LongVideoShotCastLook[],
+  matchText: string,
+  scope: CastReferenceScope = 'face',
+): { identity: string[]; wardrobe: string[]; style?: string } {
+  const identity: string[] = [];
+  const wardrobe: string[] = [];
+  const seen = new Set<string>();
+  for (const cl of resolveShotCastLooks(characters, castLooks, matchText)) {
+    const ch = characters.find((c) => c.id === cl.character_id);
+    const look = ch?.looks.find((l) => l.id === cl.look_id);
+    const refId = look?.reference_asset_id?.trim();
+    if (!refId || seen.has(refId)) continue;
+    seen.add(refId);
+    if (scope === 'wardrobe') wardrobe.push(refId);
+    else if (scope === 'face') identity.push(refId);
+  }
+  return { identity, wardrobe };
+}
+
+export type LongVideoReferencePurpose =
+  | 'identity'
+  | 'wardrobe'
+  | 'scene_layout'
+  | 'style'
+  | 'start_frame'
+  | 'end_frame';
+
+export interface LongVideoReferenceBinding {
+  asset_id: string;
+  purpose: LongVideoReferencePurpose;
+}
+
+export function buildKeyframeReferenceBindings(
+  characters: LongVideoCharacter[],
+  castLooks: LongVideoShotCastLook[],
+  matchText: string,
+  scope: CastReferenceScope = 'face',
+  sceneLook?: LongVideoShotSceneLook,
+  scenes?: LongVideoScene[],
+): LongVideoReferenceBinding[] {
+  const grouped = collectKeyframeReferenceBindings(characters, castLooks, matchText, scope);
+  const out: LongVideoReferenceBinding[] = [];
+  const seen = new Set<string>();
+  for (const id of grouped.identity) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ asset_id: id, purpose: 'identity' });
+  }
+  for (const id of grouped.wardrobe) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ asset_id: id, purpose: 'wardrobe' });
+  }
+  const styleRef = grouped.style?.trim();
+  if (styleRef && !seen.has(styleRef)) {
+    seen.add(styleRef);
+    out.push({ asset_id: styleRef, purpose: 'style' });
+  }
+  if (sceneLook?.scene_id && scenes?.length) {
+    const sc = scenes.find((s) => s.id === sceneLook.scene_id);
+    const lk = sc?.looks.find((l) => l.id === sceneLook.look_id);
+    const envRef = lk?.reference_asset_id?.trim();
+    if (envRef && !seen.has(envRef)) {
+      seen.add(envRef);
+      out.push({ asset_id: envRef, purpose: 'scene_layout' });
+    }
+  }
+  return out;
+}
+
+export function referenceBindingsToAssetIds(bindings: LongVideoReferenceBinding[]): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const b of bindings) {
+    const id = b.asset_id.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+export function serializeReferenceBindings(bindings: LongVideoReferenceBinding[]): string {
+  return JSON.stringify(bindings);
+}
+
+export function buildKeyframeGenerationRefs(
+  characters: LongVideoCharacter[],
+  castLooks: LongVideoShotCastLook[],
+  matchText: string,
+  scope: CastReferenceScope = 'face',
+  sceneLook?: LongVideoShotSceneLook,
+  scenes?: LongVideoScene[],
+): string[] {
+  return referenceBindingsToAssetIds(
+    buildKeyframeReferenceBindings(characters, castLooks, matchText, scope, sceneLook, scenes),
+  );
+}
+
+export function buildSegmentReferenceBindings(
+  lv: { shots: LongVideoShotState[]; chain_mode?: LongVideoChainMode; characters?: LongVideoCharacter[] },
+  index: number,
+  characters: LongVideoCharacter[],
+): LongVideoReferenceBinding[] {
+  const shot = lv.shots[index];
+  if (!shot) return [];
+  const chainMode = effectiveShotChainMode(shot, lv.chain_mode ?? 'keyframe_only');
+  const out: LongVideoReferenceBinding[] = [];
+  const seen = new Set<string>();
+
+  const push = (asset_id: string | undefined, purpose: LongVideoReferencePurpose) => {
+    const id = asset_id?.trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    out.push({ asset_id: id, purpose });
+  };
+
+  const sourceId = segmentI2vSourceAssetId(lv, index);
+  push(sourceId ?? undefined, 'start_frame');
+
+  const endId = segmentI2vEndFrameAssetId(lv, index) ?? shot.end_frame_asset_id;
+  if (chainMode === 'first_last') {
+    push(endId, 'end_frame');
+  }
+
+  if (chainMode === 'reference_r2v' || chainMode === 'first_last') {
+    for (const id of collectCastReferenceAssetIdsForShot(
+      characters.length ? characters : lv.characters ?? [],
+      shot.cast_looks ?? [],
+      shotCastMatchText(shot),
+    )) {
+      push(id, 'identity');
+    }
+  }
+  return out;
+}
+
+export const PRODUCTION_BLOCKER_LABEL_KEYS: Record<ProductionBlockerCode, string> = {
+  missing_cast_reference: 'video.longVideoBlockerMissingCastRef',
+  missing_scene_reference: 'video.longVideoBlockerMissingSceneRef',
+  missing_keyframe: 'video.longVideoBlockerMissingKeyframe',
+  segment_failed: 'video.longVideoBlockerSegmentFailed',
+  last_frame_missing_tail: 'video.longVideoBlockerLastFrameTail',
+  first_last_missing_end_frame: 'video.longVideoBlockerFirstLastEnd',
+  reference_r2v_missing_refs: 'video.longVideoBlockerR2vRefs',
+};
+
+export function productionBlockerI18nKey(code: ProductionBlockerCode): string {
+  return PRODUCTION_BLOCKER_LABEL_KEYS[code];
+}
+
+export interface EpisodeDeliveryChecklistItem {
+  id: string;
+  ok: boolean;
+  labelKey: string;
+}
+
+export function episodeDeliveryChecklist(
+  lv: LongVideoProjectState,
+  roster: { characters: LongVideoCharacter[]; scenes: LongVideoScene[] },
+): { ready: boolean; items: EpisodeDeliveryChecklistItem[] } {
+  const beats = lv.chapter_analysis?.scene_beats?.length ?? 0;
+  const pipe = lv.script_pipeline;
+  const scriptParsed = pipe
+    ? Boolean(pipe.workflow?.facts_approved)
+    : beats > 0 || Boolean(lv.chapter_analysis?.synopsis?.trim());
+  const shotsReviewed = pipe ? Boolean(pipe.workflow?.shots_approved || !pipe.shot_list?.length) : true;
+  const auditClean = !(pipe?.audit_report?.issues ?? []).some(
+    (i) => i.severity === 'blocker' && i.status !== 'resolved',
+  );
+
+  const castLookIds = new Set<string>();
+  for (const shot of lv.shots) {
+    for (const cl of shot.cast_looks ?? []) {
+      castLookIds.add(`${cl.character_id}:${cl.look_id}`);
+    }
+  }
+  let castRefsOk = true;
+  for (const clKey of castLookIds) {
+    const [cid, lid] = clKey.split(':');
+    const ch = roster.characters.find((c) => c.id === cid);
+    const lk = ch?.looks.find((l) => l.id === lid);
+    if (lk && (lk.body.trim() || ch?.name.trim()) && !lk.reference_asset_id) {
+      castRefsOk = false;
+      break;
+    }
+  }
+
+  const scenesBound =
+    lv.shots.length === 0 ||
+    lv.shots.every((s) => !shotVideoPrompt(s) || Boolean(s.scene_look?.scene_id));
+
+  const keyframesOk = lv.shots.every(
+    (s) => !shotNeedsKeyframe(s) || !shotVideoPrompt(s) || Boolean(s.keyframe_asset_id),
+  );
+
+  const segmentsOk = lv.shots.every(
+    (s) => !shotVideoPrompt(s) || (Boolean(s.segment_asset_id) && s.status === 'segment_ready'),
+  );
+
+  const noFailed = !lv.shots.some((s) => s.status === 'failed');
+
+  const chainResolved = !productionBlockers(lv, roster).some((c) =>
+    [
+      'last_frame_missing_tail',
+      'first_last_missing_end_frame',
+      'reference_r2v_missing_refs',
+    ].includes(c),
+  );
+
+  const items: EpisodeDeliveryChecklistItem[] = [
+    { id: 'script_parsed', ok: scriptParsed, labelKey: 'video.deliveryChecklistScript' },
+    { id: 'facts_approved', ok: scriptParsed, labelKey: 'video.deliveryChecklistFacts' },
+    { id: 'shots_approved', ok: shotsReviewed && auditClean, labelKey: 'video.deliveryChecklistShotsReview' },
+    { id: 'cast_refs', ok: castRefsOk, labelKey: 'video.deliveryChecklistCastRefs' },
+    { id: 'scenes_bound', ok: scenesBound, labelKey: 'video.deliveryChecklistScenes' },
+    { id: 'keyframes', ok: keyframesOk, labelKey: 'video.deliveryChecklistKeyframes' },
+    { id: 'segments', ok: segmentsOk, labelKey: 'video.deliveryChecklistSegments' },
+    { id: 'no_failed', ok: noFailed, labelKey: 'video.deliveryChecklistNoFailed' },
+    { id: 'chain_resolved', ok: chainResolved, labelKey: 'video.deliveryChecklistChain' },
+  ];
+  return { ready: items.every((i) => i.ok), items };
+}
+
+export function shotBindingFingerprint(shot: LongVideoShotState): string {
+  return JSON.stringify({
+    cast: shot.cast_looks ?? [],
+    scene: shot.scene_look ?? null,
+    revision: shot.asset_revision ?? null,
+  });
+}
+
+export function invalidateShotArtifactsOnBindingChange(
+  prevShot: LongVideoShotState | undefined,
+  nextShot: LongVideoShotState,
+): LongVideoShotState {
+  if (!prevShot) return nextShot;
+  if (shotBindingFingerprint(prevShot) === shotBindingFingerprint(nextShot)) {
+    return nextShot;
+  }
+  return {
+    ...nextShot,
+    keyframe_asset_id: undefined,
+    segment_asset_id: undefined,
+    end_frame_asset_id: undefined,
+    start_frame_asset_id: undefined,
+    prev_tail_frame_asset_id: undefined,
+    status: 'draft',
+    error: undefined,
+  };
 }
 
 const APPEARANCE_STOP = new Set([
@@ -693,17 +1052,17 @@ function normalizeSceneLine(rawScene: string, locale: 'zh' | 'en'): string {
 function keyframeSceneComposeNote(locale: 'zh' | 'en', scope: CastReferenceScope): string {
   if (scope === 'wardrobe') {
     return locale === 'zh'
-      ? '按本镜场景构图与动作；仅服饰/配色与定妆一致，本帧不要求清晰面部。'
-      : 'Compose this shot per scene framing and action; match outfit palette only—no readable face in frame.';
+      ? '短剧静帧：景别、站位与可见动作优先；仅服饰/配色与定妆一致，本帧不要求清晰面部。少写氛围形容词。'
+      : 'Short-drama still: prioritize shot size, blocking, and visible action; match outfit palette only—no readable face. Avoid mood fluff.';
   }
   if (scope === 'none') {
     return locale === 'zh'
-      ? '按本镜场景构图与环境；无人物或人物不可见。'
-      : 'Compose environment per scene; no visible characters.';
+      ? '短剧静帧：景别与环境可见物优先；无人物或人物不可见。少写氛围形容词。'
+      : 'Short-drama still: prioritize shot size and visible props; no characters. Avoid mood fluff.';
   }
   return locale === 'zh'
-    ? '按本镜场景构图、景别与动作，环境背景完整；仅面部/服饰与角色定妆一致，勿复制定妆图的构图或纯色背景。'
-    : 'Compose this shot with full scene, framing, and action; match cast face/outfit only—do not copy portrait framing or plain backdrop.';
+    ? '短剧静帧：景别、站位与可见动作优先，环境背景完整；仅面部/服饰与定妆一致，勿复制定妆构图或纯色背景。少写「电影感/氛围感」。'
+    : 'Short-drama still: prioritize shot size, blocking, and visible action with full environment; match cast face/outfit only—no portrait framing or plain backdrop. Avoid cinematic/atmosphere filler.';
 }
 
 function keyframeCastSectionNote(locale: 'zh' | 'en', scope: CastReferenceScope = 'face'): string {
@@ -783,8 +1142,8 @@ function buildKeyframeMarkdownFromAnchorBlocks(
 
 function keyframeSceneSetSectionNote(locale: 'zh' | 'en'): string {
   return locale === 'zh'
-    ? '环境布景与光线参考；人物构图与动作以「场景」章节为准。'
-    : 'Environment and lighting reference—character blocking follows the Scene section.';
+    ? '环境布景与光线参考（可见物优先）；人物站位与动作以「场景」章节为准。'
+    : 'Environment and lighting reference (visible props first)—character blocking follows the Scene section.';
 }
 
 function buildKeyframeMarkdownSceneSetSection(
@@ -1390,6 +1749,24 @@ export const KEYFRAME_CAST_NEGATIVE_ZH =
 export const KEYFRAME_CAST_NEGATIVE_EN =
   'solo portrait, headshot, id photo, plain background, bust only, copy portrait framing';
 
+/** Stable face/body text for prompts; falls back to deprecated identity_notes. */
+export function characterVisualIdentity(ch: LongVideoCharacter): string {
+  return (ch.visual_identity || ch.identity_notes || '').trim();
+}
+
+function characterIdentityPrefix(ch: LongVideoCharacter, locale: 'zh' | 'en'): string {
+  const bits: string[] = [];
+  const baseline = (ch.identity_baseline || '').trim();
+  const visual = characterVisualIdentity(ch);
+  const age = (ch.age_range || '').trim();
+  const gender = (ch.gender_presentation || '').trim();
+  if (baseline) bits.push(baseline);
+  if (age) bits.push(locale === 'zh' ? `年龄${age}` : `age ${age}`);
+  if (gender) bits.push(gender);
+  if (visual) bits.push(visual);
+  return bits.join(locale === 'zh' ? '；' : '; ');
+}
+
 export function syncRosterToCharacterAnchor(
   characters: LongVideoCharacter[],
   styleAnchor: string,
@@ -1397,12 +1774,14 @@ export function syncRosterToCharacterAnchor(
   const locale: 'zh' | 'en' = characters.some((c) => /[\u4e00-\u9fff]/.test(c.name)) ? 'zh' : 'en';
   const lines: string[] = [];
   for (const ch of characters) {
+    const identity = characterIdentityPrefix(ch, locale);
     for (const lk of ch.looks) {
-      if (!lk.body.trim() && !lk.label.trim()) continue;
+      if (!lk.body.trim() && !lk.label.trim() && !identity) continue;
+      const body = [identity, lk.body.trim()].filter(Boolean).join(locale === 'zh' ? '。' : '. ');
       lines.push(
         locale === 'zh'
-          ? `【角色·${ch.name}·${lk.label}】${lk.body}`
-          : `[Character: ${ch.name} | ${lk.label}] ${lk.body}`,
+          ? `【角色·${ch.name}·${lk.label}】${body}`
+          : `[Character: ${ch.name} | ${lk.label}] ${body}`,
       );
     }
   }
@@ -1657,6 +2036,7 @@ export function createCharacterEntry(name: string, locale: 'zh' | 'en' = 'zh'): 
   return {
     id,
     name: trimmed,
+    role: 'supporting',
     default_look_id: lookId,
     looks: [{ id: lookId, label, body: '' }],
   };
@@ -1783,7 +2163,22 @@ export function characterLookOutfitParts(
   const vision = look.vision_description?.trim();
   if (vision) return { appearance: vision, wardrobe: '' };
 
+  const visualId = characterVisualIdentity(ch);
   const parsed = parseCharacterLookBody(look.body);
+  if (visualId) {
+    const appearance = sanitizeCharacterAppearanceText(visualId, ch, otherCharacterNames);
+    let wardrobe = sanitizeCharacterAppearanceText(
+      parsed.wardrobe || parsed.appearance || look.body || '',
+      ch,
+      otherCharacterNames,
+    );
+    if (wardrobe && textAlreadyCovered(appearance, wardrobe)) wardrobe = '';
+    return {
+      appearance: appearance || ch.name.trim(),
+      wardrobe,
+    };
+  }
+
   const appearance = sanitizeCharacterAppearanceText(
     parsed.appearance || look.body || '',
     ch,
@@ -1843,18 +2238,26 @@ export function buildPortraitPrompt(
   }
   const appearance = portraitAppearanceForPrompt(ch, look, opts?.otherCharacterNames ?? []);
   const style = styleAnchor.trim().slice(0, 120);
+  const baseline = (ch.identity_baseline || '').trim();
+  const age = (ch.age_range || '').trim();
+  const gender = (ch.gender_presentation || '').trim();
+  const identityBits = [baseline, age, gender].filter(Boolean).join(locale === 'zh' ? '，' : ', ');
   if (locale === 'zh') {
     return (
       `【定妆】单人角色设定参考，仅一名角色，无其他人物，中性表情，头肩至半身，` +
       `纯色或简洁背景，清晰面部与服饰，不含剧情动作。` +
-      `角色：${ch.name}（${look.label}）。外貌：${appearance}。` +
+      `角色：${ch.name}（${look.label}）` +
+      (identityBits ? `，${identityBits}` : '') +
+      `。外貌：${appearance}。` +
       (style ? `画风：${style}。` : '')
     );
   }
   return (
     `[Portrait] solo character reference, single person only, neutral expression, head-to-waist, ` +
     `plain background, clear face and outfit, no action or story scene. ` +
-    `Character: ${ch.name} (${look.label}). Appearance: ${appearance}. ` +
+    `Character: ${ch.name} (${look.label})` +
+    (identityBits ? `, ${identityBits}` : '') +
+    `. Appearance: ${appearance}. ` +
     (style ? `Style: ${style}.` : '')
   );
 }
@@ -1993,11 +2396,29 @@ export function mergeCharacterRosters(
       looks.find((lk) => lk.id === inc.default_look_id)?.id ??
       looks[0]?.id ??
       inc.default_look_id;
+    const pickStr = (incoming?: string, prior?: string) =>
+      (incoming || '').trim() || (prior || '').trim() || undefined;
+    const pickAliases = () => {
+      if (inc.aliases?.length) return inc.aliases;
+      if (prev.aliases?.length) return prev.aliases;
+      return undefined;
+    };
     return {
       ...inc,
       name: inc.name.trim() || prev.name,
+      role: inc.role || prev.role,
+      aliases: pickAliases(),
+      age_range: pickStr(inc.age_range, prev.age_range),
+      gender_presentation: pickStr(inc.gender_presentation, prev.gender_presentation),
+      identity_baseline: pickStr(inc.identity_baseline, prev.identity_baseline),
+      visual_identity: pickStr(inc.visual_identity, prev.visual_identity || prev.identity_notes),
+      voice_manner: pickStr(inc.voice_manner, prev.voice_manner),
+      performance_notes: pickStr(inc.performance_notes, prev.performance_notes),
+      identity_notes: pickStr(inc.identity_notes, prev.identity_notes),
       looks,
       default_look_id: defaultLookId,
+      library_entity_id: prev.library_entity_id ?? inc.library_entity_id,
+      library_version: prev.library_version ?? inc.library_version,
     };
   });
 
@@ -2168,18 +2589,24 @@ export function mergeParsedShotsWithPrevious(
   return incoming.map((shot) => {
     const prev = prevById.get(shot.id);
     if (!prev) return shot;
-    const merged: LongVideoShotState = { ...shot };
-    if (prev.cast_looks?.length) merged.cast_looks = [...prev.cast_looks];
-    if (prev.scene_look) merged.scene_look = prev.scene_look;
-    if (prev.keyframe_asset_id) {
-      merged.keyframe_asset_id = prev.keyframe_asset_id;
-      merged.status = prev.status;
+    const merged: LongVideoShotState = {
+      ...shot,
+      cast_looks: prev.cast_looks?.length ? [...prev.cast_looks] : shot.cast_looks,
+      scene_look: prev.scene_look ?? shot.scene_look,
+      asset_revision: prev.asset_revision ?? shot.asset_revision,
+    };
+    if (shotBindingFingerprint(prev) !== shotBindingFingerprint(merged)) {
+      return invalidateShotArtifactsOnBindingChange(prev, merged);
     }
-    if (prev.segment_asset_id) {
-      merged.segment_asset_id = prev.segment_asset_id;
-      if (prev.status === 'segment_ready') merged.status = prev.status;
-    }
-    return merged;
+    return {
+      ...merged,
+      keyframe_asset_id: prev.keyframe_asset_id ?? merged.keyframe_asset_id,
+      segment_asset_id: prev.segment_asset_id ?? merged.segment_asset_id,
+      end_frame_asset_id: prev.end_frame_asset_id ?? merged.end_frame_asset_id,
+      start_frame_asset_id: prev.start_frame_asset_id ?? merged.start_frame_asset_id,
+      prev_tail_frame_asset_id: prev.prev_tail_frame_asset_id ?? merged.prev_tail_frame_asset_id,
+      status: prev.status ?? merged.status,
+    };
   });
 }
 
@@ -2412,8 +2839,9 @@ export function shotSceneText(shot: LongVideoShotState): string {
 export function resolveSceneForShot(
   lv: LongVideoProjectState,
   shot: LongVideoShotState,
+  scenesOverride?: LongVideoScene[],
 ): LongVideoScene | undefined {
-  const scenes = lv.scenes ?? [];
+  const scenes = scenesOverride ?? lv.scenes ?? [];
   const sceneLook = shot.scene_look;
   if (sceneLook?.scene_id) {
     const byId = scenes.find((s) => s.id === sceneLook.scene_id);
@@ -2714,5 +3142,16 @@ export function projectStateForServer(
   const { selection, project_id, ...rest } = lv;
   void selection;
   void project_id;
+  // Episode under a series: cast/scenes live on series + variants — never persist
+  // a materialized roster back onto the episode row.
+  if (rest.series_id) {
+    return {
+      ...rest,
+      characters: [],
+      scenes: [],
+      character_variants: rest.character_variants ?? {},
+      scene_variants: rest.scene_variants ?? {},
+    };
+  }
   return rest;
 }

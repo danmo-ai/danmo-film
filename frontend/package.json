@@ -9,12 +9,12 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",
-    "canvas-unit": "npx --yes tsx src/utils/canvasEdges.unit.ts && npx --yes tsx src/utils/canvasExtendPreview.unit.ts && npx --yes tsx src/utils/canvasStaging.unit.ts && npx --yes tsx src/utils/registryParamSchema.unit.ts && npx --yes tsx src/utils/genTaskLog.unit.ts && npx --yes tsx src/utils/longVideoCast.unit.ts"
+    "canvas-unit": "npx --yes tsx src/utils/canvasEdges.unit.ts && npx --yes tsx src/utils/canvasExtendPreview.unit.ts && npx --yes tsx src/utils/canvasStaging.unit.ts && npx --yes tsx src/utils/registryParamSchema.unit.ts && npx --yes tsx src/utils/genTaskLog.unit.ts && npx --yes tsx src/utils/longVideoCast.unit.ts && npx --yes tsx src/utils/longVideoLibrary.unit.ts && npx --yes tsx src/utils/longVideoSeries.unit.ts && npx --yes tsx src/utils/longVideoProject.unit.ts"
   },
   "dependencies": {
-    "@danqing/dq-shell": "file:../dq-ui/packages/shell",
-    "@danqing/dq-tokens": "file:../dq-ui/packages/tokens",
-    "@danqing/dq-ui": "file:../dq-ui/packages/ui",
+    "@danqing/dq-shell": "file:../../dq-ui/packages/shell",
+    "@danqing/dq-tokens": "file:../../dq-ui/packages/tokens",
+    "@danqing/dq-ui": "file:../../dq-ui/packages/ui",
     "@tauri-apps/api": "^2.11.1",
     "axios": "^1.7.2",
     "pinia": "^2.1.7",
@@ -28,5 +28,8 @@
     "typescript": "^5.4.5",
     "vite": "^5.2.12",
     "vue-tsc": "^2.0.19"
+  },
+  "overrides": {
+    "@tanstack/vue-virtual": "3.13.12"
   }
 }

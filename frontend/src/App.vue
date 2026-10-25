@@ -1,81 +1,55 @@
 <template>
-  <div class="main-container dq-app-shell dq-app-shell--sidebar">
-    <aside class="app-sidebar dq-app-sidebar dq-glass--sidebar">
-      <nav class="dq-top-nav-menu film-nav">
-        <button
-          type="button"
-          class="film-nav__brand"
-          @click="router.push({ name: 'long_video_create' })"
-        >
-          Danmo Film
-        </button>
-        <button
-          type="button"
-          :class="['film-nav__item', { active: activePage === 'long_video_create' }]"
-          @click="router.push({ name: 'long_video_create' })"
-        >
-          {{ $tt('nav.long_video_create') }}
-        </button>
-        <button
-          type="button"
-          :class="['film-nav__item', { active: activePage === 'settings' }]"
-          @click="router.push({ name: 'settings' })"
-        >
-          {{ $tt('nav.settings') }}
-        </button>
-      </nav>
+  <div class="main-container film-shell dq-app-shell dq-app-shell--sidebar">
+    <aside class="film-sidebar app-sidebar dq-app-sidebar dq-glass--sidebar">
+      <div class="dq-tauri-titlebar-inset" aria-hidden="true" />
+      <FilmSideNav :active-page="activePage" @navigate="onNavigate" />
     </aside>
-    <main class="app-main dq-app-main">
+    <main class="film-main app-main dq-app-main">
       <router-view />
     </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import FilmSideNav from '@/components/shell/FilmSideNav.vue';
 
 const route = useRoute();
 const router = useRouter();
-const activePage = ref(String(route.name || 'long_video_create'));
+
+const CREATE_SECTION = new Set([
+  'long_video_projects',
+  'long_video_series',
+  'long_video_create',
+]);
+
+function navActiveForRoute(name: unknown): string {
+  const n = String(name || 'long_video_projects');
+  if (CREATE_SECTION.has(n)) return 'long_video_create';
+  return n;
+}
+
+const activePage = ref(navActiveForRoute(route.name));
+
 watch(
   () => route.name,
   (name) => {
-    activePage.value = String(name || 'long_video_create');
+    activePage.value = navActiveForRoute(name);
   },
 );
+
+function onNavigate(name: string) {
+  if (name === 'long_video_create') {
+    void router.push({ name: 'long_video_projects' });
+    return;
+  }
+  void router.push({ name });
+}
 </script>
 
 <style scoped>
-.film-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 16px 12px;
-}
-.film-nav__brand {
-  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, serif;
-  font-size: 1.25rem;
-  font-weight: 600;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  color: var(--dq-text, #e8e8e8);
-  cursor: pointer;
-  margin-bottom: 12px;
-}
-.film-nav__item {
-  text-align: left;
-  background: transparent;
-  border: 0;
-  color: var(--dq-text-muted, #aaa);
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.film-nav__item.active,
-.film-nav__item:hover {
-  color: var(--dq-text, #fff);
-  background: color-mix(in srgb, var(--dq-accent, #6a8) 18%, transparent);
+.main-container {
+  height: 100%;
 }
 </style>

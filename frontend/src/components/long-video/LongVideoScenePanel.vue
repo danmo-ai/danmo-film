@@ -1,5 +1,56 @@
 <template>
   <section class="lv-scene-workshop lv-section">
+    <div v-if="seriesLinked" class="lv-asset-scope-bar">
+      <span class="lv-asset-scope-bar__label">{{ $tt('video.longVideoAssetEditScope') }}</span>
+      <div class="lv-asset-scope-bar__toggle" role="group" :aria-label="$tt('video.longVideoAssetEditScope')">
+        <button
+          type="button"
+          class="lv-asset-scope-bar__opt"
+          :class="{ 'is-active': assetEditScope === 'episode' }"
+          @click="emit('update:assetEditScope', 'episode')"
+        >
+          {{ $tt('video.longVideoAssetScopeEpisode') }}
+        </button>
+        <button
+          type="button"
+          class="lv-asset-scope-bar__opt"
+          :class="{ 'is-active': assetEditScope === 'series' }"
+          @click="emit('update:assetEditScope', 'series')"
+        >
+          {{ $tt('video.longVideoAssetScopeSeries') }}
+        </button>
+      </div>
+      <span v-if="selectedScene?.library_version != null" class="lv-asset-scope-bar__badge">
+        {{ $tt('video.longVideoLibraryVersionBadge', { v: selectedScene!.library_version! }) }}
+      </span>
+      <div class="lv-asset-scope-bar__actions">
+        <DqButton
+          v-if="canRestoreFromSeries"
+          size="sm"
+          type="text"
+          @click="emit('restore-series-master', selectedScene?.id)"
+        >
+          {{ $tt('video.longVideoRestoreSeriesMaster') }}
+        </DqButton>
+        <DqButton
+          v-if="canPromoteSelectedToSeries"
+          size="sm"
+          type="text"
+          @click="emit('promote-to-series', selectedScene!.id)"
+        >
+          {{ $tt('video.longVideoPromoteEntityToSeries') }}
+        </DqButton>
+        <DqButton
+          v-if="assetEditScope === 'series' && showLibraryPublish"
+          size="sm"
+          type="default"
+          :loading="publishingLibrary"
+          @click="emit('publish-library-version', selectedScene?.id)"
+        >
+          {{ $tt('video.longVideoPublishLibraryVersion') }}
+        </DqButton>
+      </div>
+    </div>
     <div v-if="scriptSourceLabel || scenes.length" class="lv-scene-workshop__source">
       <span v-if="scriptSourceLabel" class="lv-scene-workshop__source-text">{{ scriptSourceLabel }}</span>
       <div class="lv-scene-workshop__source-actions">
@@ -308,10 +359,20 @@ const props = defineProps<{
   refGeneratingKey?: string | null;
   visionBackfillKey?: string | null;
   batchGenerating?: boolean;
+  seriesLinked?: boolean;
+  assetEditScope?: 'episode' | 'series';
+  canRestoreFromSeries?: boolean;
+  promotableSceneIds?: string[];
+  showLibraryPublish?: boolean;
+  publishingLibrary?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'update:scenes', value: LongVideoScene[]): void;
+  (e: 'update:assetEditScope', value: 'episode' | 'series'): void;
+  (e: 'restore-series-master', sceneId?: string): void;
+  (e: 'promote-to-series', sceneId: string): void;
+  (e: 'publish-library-version', sceneId?: string): void;
   (e: 'generate-ref', sceneIndex: number, lookIndex: number): void;
   (e: 'pick-ref-gallery', sceneIndex: number, lookIndex: number): void;
   (e: 'clear-ref', sceneIndex: number, lookIndex: number): void;
@@ -320,6 +381,9 @@ const emit = defineEmits<{
   (e: 'go-to-storyboard'): void;
   (e: 'go-to-script'): void;
 }>();
+
+const seriesLinked = computed(() => Boolean(props.seriesLinked));
+const assetEditScope = computed(() => props.assetEditScope ?? 'episode');
 
 const { t: $tt, locale } = useI18n();
 const uiLocale = computed(() => (locale.value.startsWith('zh') ? 'zh' : 'en'));
@@ -336,6 +400,12 @@ const readyRefCount = computed(() =>
   ),
 );
 const selectedScene = computed(() => props.scenes[selectedIndex.value] ?? null);
+
+const canPromoteSelectedToSeries = computed(() => {
+  const id = selectedScene.value?.id;
+  if (!id || assetEditScope.value !== 'episode') return false;
+  return (props.promotableSceneIds ?? []).includes(id);
+});
 
 const scriptSourceLabel = computed(() => {
   if (!props.scriptParsed) return '';

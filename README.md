@@ -2,7 +2,7 @@
 
 Long-form video workbench for the Danmo suite: script → storyboard → timeline → segment generation → assemble.
 
-**Providers are peers.** Danmo Make and cloud vendors supply LLM / image / short-clip APIs the same way. Film downloads results, stores them in its own asset library (`fas_*`), then merges and manages media locally. Finals are **not** uploaded back to Make.
+The API is **Go**. The UI is Vue. **Providers are peers.** Danmo Make and cloud vendors (Volcengine Seedance, DashScope 万相, MiniMax Hailuo) supply LLM / image / short-clip APIs. Film downloads results, stores them in its own asset library (`fas_*`), then merges and manages media locally. Finals are **not** uploaded back to Make.
 
 ## Dev ports
 
@@ -14,15 +14,15 @@ Long-form video workbench for the Danmo suite: script → storyboard → timelin
 ## Quick start
 
 ```bash
-python3.11 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-make install-frontend
+make dev    # Go API :7803 + Vite :5803
+make stop
+```
 
-# Terminal A — Film API
-make backend
+Or split:
 
-# Terminal B — Film UI
-make frontend
+```bash
+make backend          # API only
+make frontend-dev     # Vite only (after npm install)
 ```
 
 Optional: point generation / LLM at Make (or any OpenAI-compatible base):
@@ -31,14 +31,31 @@ Optional: point generation / LLM at Make (or any OpenAI-compatible base):
 export FILM_MAKE_BASE_URL=http://127.0.0.1:7800
 export FILM_LLM_BASE_URL=http://127.0.0.1:7800
 export FILM_LLM_MODEL=<your-local-llm-id>
+export FILM_GENERATION_PROVIDER=danmo-make   # or volcengine | dashscope | minimax
 ```
 
-Settings file: `~/.danmo-film/config/settings.json`.
+Settings file: `~/.danmo-film/config/settings.json` (also editable in UI **Settings**).
+
+```json
+{
+  "providers": {
+    "llm": { "protocol": "openai", "base_url": "http://127.0.0.1:7800", "model": "" },
+    "generation": { "provider": "danmo-make", "base_url": "http://127.0.0.1:7800" },
+    "volcengine": { "api_key": "", "model": "doubao-seedance-1-0-pro-250528" },
+    "dashscope": { "api_key": "", "model": "wan2.2-t2v-plus" },
+    "minimax": { "api_key": "", "model": "MiniMax-Hailuo-02" }
+  }
+}
+```
+
+`generation.provider`: `danmo-make` | `volcengine` | `dashscope` | `minimax`. Saving in the UI applies immediately (no restart).
 
 ## Layout
 
-- `backend/film/` — domain helpers (timing, parse quality, stitch)
-- `backend/llm/` — script-parse / storyboard LLM pipeline
-- `backend/providers/` — Make + cloud generation / LLM adapters (peers)
-- `backend/persistence/film_asset_store.py` — Film asset SoR
+- `cmd/danmo-film/` — API process
+- `core/port/` — `LLMProvider`, `GenerationProvider`, stores
+- `core/adapter/llm/` — Chat Completions / Responses / Anthropic
+- `core/adapter/gen/` — Make + cloud video adapters
+- `core/store/sqlite/` — Film asset SoR + projects
+- `core/service/scriptparse/` — 4-pass script-parse pipeline
 - `frontend/` — Film UI (long-video studio)
