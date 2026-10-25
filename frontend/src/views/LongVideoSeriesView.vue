@@ -73,39 +73,17 @@
         <LongVideoCastPanel
           :characters="seriesState.characters ?? []"
           :project-id="seriesId"
+          show-library-controls
+          :library-publishing="libraryBusyKind === 'character-publish'"
+          :library-saving="libraryBusyKind === 'character-save'"
+          :library-switching="libraryBusyKind === 'character-switch'"
           @update:characters="onSeriesCharacters"
+          @switch-library-version="onSwitchCharacterLibraryVersion"
+          @save-draft="onSaveCharacterDraft"
+          @finalize-asset="onFinalizeCharacter"
+          @finalize-look="onFinalizeCharacterLook"
+          @fork-draft="onForkCharacterDraft"
         />
-        <div v-if="seriesState.characters?.length" class="lv-series-workspace__library-list">
-          <div
-            v-for="ch in seriesState.characters"
-            :key="ch.id"
-            class="lv-series-workspace__library-row"
-          >
-            <span>{{ ch.name }}</span>
-            <span v-if="ch.library_version" class="lv-asset-scope-bar__badge">
-              {{ $tt('video.longVideoLibraryVersionBadge', { v: ch.library_version }) }}
-            </span>
-            <DqButton
-              v-if="!ch.library_entity_id"
-              size="sm"
-              type="text"
-              @click="linkCharacterLibrary(ch.id)"
-            >
-              {{ $tt('video.longVideoSeriesLinkLibrary') }}
-            </DqButton>
-            <DqButton
-              v-else
-              size="sm"
-              type="text"
-              @click="openVersionHistory('character', ch.library_entity_id!, ch.name)"
-            >
-              {{ $tt('video.longVideoSeriesOpenVersions') }}
-            </DqButton>
-            <DqButton size="sm" type="text" @click="publishCharacter(ch.id)">
-              {{ $tt('video.longVideoPublishLibraryVersion') }}
-            </DqButton>
-          </div>
-        </div>
       </div>
 
       <div v-show="workspaceTab === 'scenes'" class="lv-editor-pane lv-editor-pane--scenes">
@@ -117,44 +95,17 @@
         <LongVideoScenePanel
           :scenes="seriesState.scenes ?? []"
           :project-id="seriesId"
+          show-library-controls
+          :library-publishing="libraryBusyKind === 'scene-publish'"
+          :library-saving="libraryBusyKind === 'scene-save'"
+          :library-switching="libraryBusyKind === 'scene-switch'"
           @update:scenes="onSeriesScenes"
+          @switch-library-version="onSwitchSceneLibraryVersion"
+          @save-draft="onSaveSceneDraft"
+          @finalize-asset="onFinalizeScene"
+          @finalize-look="onFinalizeSceneLook"
+          @fork-draft="onForkSceneDraft"
         />
-        <div v-if="seriesState.scenes?.length" class="lv-series-workspace__library-list">
-          <div
-            v-for="sc in seriesState.scenes"
-            :key="sc.id"
-            class="lv-series-workspace__library-row"
-          >
-            <span>
-              {{ sc.name }}
-              <template v-if="sc.time_of_day || sc.weather">
-                · {{ sc.time_of_day || '—' }} / {{ sc.weather || '—' }}
-              </template>
-            </span>
-            <span v-if="sc.library_version" class="lv-asset-scope-bar__badge">
-              {{ $tt('video.longVideoLibraryVersionBadge', { v: sc.library_version }) }}
-            </span>
-            <DqButton
-              v-if="!sc.library_entity_id"
-              size="sm"
-              type="text"
-              @click="linkSceneLibrary(sc.id)"
-            >
-              {{ $tt('video.longVideoSeriesLinkLibrary') }}
-            </DqButton>
-            <DqButton
-              v-else
-              size="sm"
-              type="text"
-              @click="openVersionHistory('scene', sc.library_entity_id!, sc.name)"
-            >
-              {{ $tt('video.longVideoSeriesOpenVersions') }}
-            </DqButton>
-            <DqButton size="sm" type="text" @click="publishScene(sc.id)">
-              {{ $tt('video.longVideoPublishLibraryVersion') }}
-            </DqButton>
-          </div>
-        </div>
       </div>
 
       <div v-show="workspaceTab === 'episodes'" class="lv-editor-pane lv-series-pane">
@@ -243,13 +194,6 @@
       <p v-else class="lv-series-detail__hint">{{ $tt('common.loading') }}</p>
     </DqDialog>
 
-    <DqDialog v-model:open="versionDialogOpen" :title="versionDialogTitle" width="480px">
-      <ul v-if="versionRows.length" class="lv-series-detail__ep-list" role="list">
-        <li v-for="v in versionRows" :key="v.version" class="lv-series-detail__ep">
-          <span class="lv-series-detail__ep-meta">v{{ v.version }} · {{ formatUpdated(v.created_at) }}</span>
-        </li>
-      </ul>
-    </DqDialog>
   </div>
 </template>
 
@@ -263,11 +207,20 @@ import { $tt } from '@/utils/i18n';
 import type { LibraryEntityVersion, LongVideoCharacter, LongVideoScene, LongVideoSeriesDetail, LongVideoSeriesEpisodeSummary, LongVideoSeriesState } from '@/types';
 import { defaultSeriesState, newStableId } from '@/utils/longVideoSeries';
 import {
+  characterAssetStatus,
   characterFromLibraryDefinition,
+  finalizeCharacterLook,
+  finalizeSceneLook,
+  freezeAllCharacterLooks,
+  freezeAllSceneLooks,
+  forkCharacterDraft,
+  forkSceneDraft,
+  libraryVersionStatus,
   listLibraryUpdates,
   loadSeriesWithLibraryMigration,
   publishCharacterToLibrary,
   publishSceneToLibrary,
+  sceneAssetStatus,
   sceneFromLibraryDefinition,
   upgradeSeriesEntityLibraryVersion,
   type LibraryUpdateRow,
@@ -302,9 +255,15 @@ const libraryUpdates = ref<LibraryUpdateRow[]>([]);
 const libraryPickerOpen = ref(false);
 const libraryPickerKind = ref<'character' | 'scene'>('character');
 const libraryPickerItems = ref<LibraryEntityVersion[]>([]);
-const versionDialogOpen = ref(false);
-const versionDialogTitle = ref('');
-const versionRows = ref<LibraryEntityVersion[]>([]);
+const libraryBusyKind = ref<
+  | ''
+  | 'character-publish'
+  | 'character-save'
+  | 'character-switch'
+  | 'scene-publish'
+  | 'scene-save'
+  | 'scene-switch'
+>('');
 
 const seriesId = computed(() => String(route.params.seriesId || ''));
 const seriesState = computed((): LongVideoSeriesState =>
@@ -530,53 +489,210 @@ function importLibraryRow(row: LibraryEntityVersion) {
   void saveSeries();
 }
 
-async function linkCharacterLibrary(rosterId: string) {
+async function onSaveCharacterDraft(rosterId: string) {
+  if (!series.value || !rosterId) return;
+  libraryBusyKind.value = 'character-save';
+  try {
+    await saveSeries();
+    toast.success($tt('video.longVideoAssetSaveDraftOk'));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    libraryBusyKind.value = '';
+  }
+}
+
+async function onSaveSceneDraft(rosterId: string) {
+  if (!series.value || !rosterId) return;
+  libraryBusyKind.value = 'scene-save';
+  try {
+    await saveSeries();
+    toast.success($tt('video.longVideoAssetSaveDraftOk'));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    libraryBusyKind.value = '';
+  }
+}
+
+async function onFinalizeCharacter(rosterId: string) {
   const ch = seriesState.value.characters?.find((c) => c.id === rosterId);
   if (!ch || !series.value) return;
+  libraryBusyKind.value = 'character-publish';
   try {
-    const row = await publishCharacterToLibrary(ch, api.library);
+    // Character finalize freezes every look in this version snapshot.
+    const row = await publishCharacterToLibrary(freezeAllCharacterLooks(ch), api.library);
     onSeriesCharacters(
       (seriesState.value.characters ?? []).map((c) => (c.id === rosterId ? row : c)),
     );
     await saveSeries();
+    toast.success(
+      $tt('video.longVideoAssetFinalizeOk', {
+        name: row.name,
+        v: row.library_version ?? '—',
+      }),
+    );
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     toast.error($tt('studio.error', { msg }));
+  } finally {
+    libraryBusyKind.value = '';
   }
 }
 
-async function linkSceneLibrary(rosterId: string) {
+async function onFinalizeScene(rosterId: string) {
   const sc = seriesState.value.scenes?.find((s) => s.id === rosterId);
   if (!sc || !series.value) return;
+  libraryBusyKind.value = 'scene-publish';
   try {
-    const row = await publishSceneToLibrary(sc, api.library);
+    const row = await publishSceneToLibrary(freezeAllSceneLooks(sc), api.library);
     onSeriesScenes((seriesState.value.scenes ?? []).map((s) => (s.id === rosterId ? row : s)));
     await saveSeries();
+    toast.success(
+      $tt('video.longVideoAssetFinalizeOk', {
+        name: row.name,
+        v: row.library_version ?? '—',
+      }),
+    );
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     toast.error($tt('studio.error', { msg }));
+  } finally {
+    libraryBusyKind.value = '';
   }
 }
 
-async function publishCharacter(rosterId: string) {
-  await linkCharacterLibrary(rosterId);
+function onForkCharacterDraft(rosterId: string) {
+  const ch = seriesState.value.characters?.find((c) => c.id === rosterId);
+  if (!ch) return;
+  onSeriesCharacters(
+    (seriesState.value.characters ?? []).map((c) =>
+      c.id === rosterId ? forkCharacterDraft(c) : c,
+    ),
+  );
+  toast.success($tt('video.longVideoAssetForkDraftOk'));
 }
 
-async function publishScene(rosterId: string) {
-  await linkSceneLibrary(rosterId);
+function onForkSceneDraft(rosterId: string) {
+  const sc = seriesState.value.scenes?.find((s) => s.id === rosterId);
+  if (!sc) return;
+  onSeriesScenes(
+    (seriesState.value.scenes ?? []).map((s) => (s.id === rosterId ? forkSceneDraft(s) : s)),
+  );
+  toast.success($tt('video.longVideoAssetForkDraftOk'));
 }
 
-async function openVersionHistory(kind: 'character' | 'scene', entityId: string, name: string) {
-  versionDialogTitle.value = name;
-  versionDialogOpen.value = true;
-  versionRows.value = [];
+async function onFinalizeCharacterLook(rosterId: string, lookId: string) {
+  const ch = seriesState.value.characters?.find((c) => c.id === rosterId);
+  if (!ch || !series.value) return;
+  let next = finalizeCharacterLook(ch, lookId);
+  // On a finalized character, republish so the current pin includes the locked look
+  // without freezing sibling draft looks.
+  if (characterAssetStatus(next) === 'final' && next.library_entity_id) {
+    libraryBusyKind.value = 'character-publish';
+    try {
+      next = await publishCharacterToLibrary(next, api.library);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error($tt('studio.error', { msg }));
+      libraryBusyKind.value = '';
+      return;
+    } finally {
+      libraryBusyKind.value = '';
+    }
+  }
+  onSeriesCharacters(
+    (seriesState.value.characters ?? []).map((c) => (c.id === rosterId ? next : c)),
+  );
+  await saveSeries();
+  toast.success($tt('video.longVideoAssetFinalizeLookOk'));
+}
+
+async function onFinalizeSceneLook(rosterId: string, lookId: string) {
+  const sc = seriesState.value.scenes?.find((s) => s.id === rosterId);
+  if (!sc || !series.value) return;
+  let next = finalizeSceneLook(sc, lookId);
+  if (sceneAssetStatus(next) === 'final' && next.library_entity_id) {
+    libraryBusyKind.value = 'scene-publish';
+    try {
+      next = await publishSceneToLibrary(next, api.library);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error($tt('studio.error', { msg }));
+      libraryBusyKind.value = '';
+      return;
+    } finally {
+      libraryBusyKind.value = '';
+    }
+  }
+  onSeriesScenes(
+    (seriesState.value.scenes ?? []).map((s) => (s.id === rosterId ? next : s)),
+  );
+  await saveSeries();
+  toast.success($tt('video.longVideoAssetFinalizeLookOk'));
+}
+
+async function onSwitchCharacterLibraryVersion(rosterId: string, version: number) {
+  const ch = seriesState.value.characters?.find((c) => c.id === rosterId);
+  if (!ch?.library_entity_id || !series.value) return;
+  libraryBusyKind.value = 'character-switch';
   try {
-    versionRows.value =
-      kind === 'character'
-        ? await api.library.listCharacterVersions(entityId)
-        : await api.library.listSceneVersions(entityId);
-  } catch {
-    versionRows.value = [];
+    const rowData = await api.library.getCharacter(ch.library_entity_id, version);
+    const status = libraryVersionStatus(rowData);
+    const nextChar = {
+      ...characterFromLibraryDefinition(
+        rowData.definition,
+        rowData.entity_id,
+        rowData.version,
+        ch.id,
+      ),
+      asset_status: status,
+    };
+    onSeriesCharacters(
+      (seriesState.value.characters ?? []).map((c) => (c.id === rosterId ? nextChar : c)),
+    );
+    await saveSeries();
+    toast.success(
+      $tt('video.longVideoLibraryVersionSwitchedNamed', { name: ch.name, v: version }),
+    );
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    libraryBusyKind.value = '';
+  }
+}
+
+async function onSwitchSceneLibraryVersion(rosterId: string, version: number) {
+  const sc = seriesState.value.scenes?.find((s) => s.id === rosterId);
+  if (!sc?.library_entity_id || !series.value) return;
+  libraryBusyKind.value = 'scene-switch';
+  try {
+    const rowData = await api.library.getScene(sc.library_entity_id, version);
+    const status = libraryVersionStatus(rowData);
+    const nextScene = {
+      ...sceneFromLibraryDefinition(
+        rowData.definition,
+        rowData.entity_id,
+        rowData.version,
+        sc.id,
+      ),
+      asset_status: status,
+    };
+    onSeriesScenes(
+      (seriesState.value.scenes ?? []).map((s) => (s.id === rosterId ? nextScene : s)),
+    );
+    await saveSeries();
+    toast.success(
+      $tt('video.longVideoLibraryVersionSwitchedNamed', { name: sc.name, v: version }),
+    );
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.error', { msg }));
+  } finally {
+    libraryBusyKind.value = '';
   }
 }
 

@@ -96,6 +96,12 @@ export const MIN_LONG_VIDEO_KEYFRAMES = 2;
 /** Default I2V segment length when a shot has no ``duration_sec``. */
 export const DEFAULT_SHOT_DURATION_SEC = 5;
 
+/** Soft max per-shot I2V duration (sec) for planning / UI options. */
+export const MAX_SHOT_DURATION_SEC = 15;
+
+/** Preset choices for default segment duration. */
+export const SEGMENT_DURATION_CHOICES = [4, 5, 8, 10, 12, 15] as const;
+
 export interface StoryboardReadiness {
   total: number;
   keyframeCount: number;
@@ -144,7 +150,7 @@ export function allocateShotDurations(options: {
 }): number[] {
   const count = Math.max(1, options.sceneCount);
   const lo = Math.max(0.5, options.minSec ?? 2);
-  const hi = Math.max(lo, options.maxSec ?? 12);
+  const hi = Math.max(lo, options.maxSec ?? MAX_SHOT_DURATION_SEC);
   const defaultSeg = Math.max(lo, Math.min(hi, options.defaultSegmentSec ?? DEFAULT_SHOT_DURATION_SEC));
   const target = Math.max(defaultSeg, options.targetDurationSec);
   const beatTexts = options.beatTexts ?? [];
@@ -1365,8 +1371,10 @@ export function charactersOnScreen(scene: string, characters: LongVideoCharacter
   const text = scene.trim();
   if (!text) return [];
   return characters.filter((ch) => {
-    const n = ch.name.trim();
-    return n.length > 0 && text.indexOf(n) >= 0;
+    const names = [ch.name, ...(ch.aliases ?? [])]
+      .map((n) => (n || '').trim())
+      .filter(Boolean);
+    return names.some((n) => text.indexOf(n) >= 0);
   });
 }
 
@@ -2038,7 +2046,8 @@ export function createCharacterEntry(name: string, locale: 'zh' | 'en' = 'zh'): 
     name: trimmed,
     role: 'supporting',
     default_look_id: lookId,
-    looks: [{ id: lookId, label, body: '' }],
+    looks: [{ id: lookId, label, body: '', look_status: 'draft' }],
+    asset_status: 'draft',
   };
 }
 
@@ -2052,6 +2061,7 @@ export function createLookEntry(
     id: makeCastStableId('look', `${characterName}|${lbl}`),
     label: lbl,
     body: '',
+    look_status: 'draft',
   };
 }
 
@@ -2064,7 +2074,8 @@ export function createSceneEntry(name: string, locale: 'zh' | 'en' = 'zh'): Long
     id,
     name: trimmed,
     default_look_id: lookId,
-    looks: [{ id: lookId, label, body: '' }],
+    looks: [{ id: lookId, label, body: '', look_status: 'draft' }],
+    asset_status: 'draft',
   };
 }
 
@@ -2078,6 +2089,7 @@ export function createSceneLookEntry(
     id: makeCastStableId('slook', `${sceneName}|${lbl}`),
     label: lbl,
     body: '',
+    look_status: 'draft',
   };
 }
 

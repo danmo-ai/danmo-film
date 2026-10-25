@@ -1,56 +1,5 @@
 <template>
   <section class="lv-scene-workshop lv-section">
-    <div v-if="seriesLinked" class="lv-asset-scope-bar">
-      <span class="lv-asset-scope-bar__label">{{ $tt('video.longVideoAssetEditScope') }}</span>
-      <div class="lv-asset-scope-bar__toggle" role="group" :aria-label="$tt('video.longVideoAssetEditScope')">
-        <button
-          type="button"
-          class="lv-asset-scope-bar__opt"
-          :class="{ 'is-active': assetEditScope === 'episode' }"
-          @click="emit('update:assetEditScope', 'episode')"
-        >
-          {{ $tt('video.longVideoAssetScopeEpisode') }}
-        </button>
-        <button
-          type="button"
-          class="lv-asset-scope-bar__opt"
-          :class="{ 'is-active': assetEditScope === 'series' }"
-          @click="emit('update:assetEditScope', 'series')"
-        >
-          {{ $tt('video.longVideoAssetScopeSeries') }}
-        </button>
-      </div>
-      <span v-if="selectedScene?.library_version != null" class="lv-asset-scope-bar__badge">
-        {{ $tt('video.longVideoLibraryVersionBadge', { v: selectedScene!.library_version! }) }}
-      </span>
-      <div class="lv-asset-scope-bar__actions">
-        <DqButton
-          v-if="canRestoreFromSeries"
-          size="sm"
-          type="text"
-          @click="emit('restore-series-master', selectedScene?.id)"
-        >
-          {{ $tt('video.longVideoRestoreSeriesMaster') }}
-        </DqButton>
-        <DqButton
-          v-if="canPromoteSelectedToSeries"
-          size="sm"
-          type="text"
-          @click="emit('promote-to-series', selectedScene!.id)"
-        >
-          {{ $tt('video.longVideoPromoteEntityToSeries') }}
-        </DqButton>
-        <DqButton
-          v-if="assetEditScope === 'series' && showLibraryPublish"
-          size="sm"
-          type="default"
-          :loading="publishingLibrary"
-          @click="emit('publish-library-version', selectedScene?.id)"
-        >
-          {{ $tt('video.longVideoPublishLibraryVersion') }}
-        </DqButton>
-      </div>
-    </div>
     <div v-if="scriptSourceLabel || scenes.length" class="lv-scene-workshop__source">
       <span v-if="scriptSourceLabel" class="lv-scene-workshop__source-text">{{ scriptSourceLabel }}</span>
       <div class="lv-scene-workshop__source-actions">
@@ -153,9 +102,16 @@
                 :model-value="selectedScene.name"
                 size="sm"
                 class="lv-scene-workshop__detail-name"
+                :disabled="identityReadOnly || identityLocked"
                 :placeholder="$tt('video.longVideoSceneNamePh')"
                 @update:model-value="onSceneName(selectedIndex, $event)"
               />
+              <p v-if="identityLocked" class="lv-scene-workshop__identity-hint">
+                {{ $tt('video.longVideoAssetFinalReadOnlyHint') }}
+              </p>
+              <p v-else-if="identityReadOnly" class="lv-scene-workshop__identity-hint">
+                {{ $tt('video.longVideoIdentityReadOnlyHint') }}
+              </p>
               <div class="lv-scene-workshop__detail-meta">
                 <span class="lv-scene-workshop__detail-chip">
                   {{ $tt('video.longVideoSceneVariantCount', { n: selectedScene.looks.length }) }}
@@ -170,11 +126,97 @@
             </div>
           </div>
           <div class="lv-scene-workshop__detail-actions">
-            <DqButton type="primary" @click="addLook(selectedIndex)">
+            <div
+              v-if="showLibraryControls"
+              class="lv-scene-workshop__library-controls"
+            >
+              <span
+                class="lv-scene-workshop__status-badge"
+                :class="selectedAssetStatus === 'final' ? 'is-final' : 'is-draft'"
+              >
+                {{
+                  selectedAssetStatus === 'final'
+                    ? $tt('video.longVideoAssetStatusFinal')
+                    : $tt('video.longVideoAssetStatusDraft')
+                }}
+              </span>
+              <template v-if="selectedScene.library_entity_id && selectedAssetStatus === 'final'">
+                <label class="lv-scene-workshop__library-version">
+                  <span class="lv-scene-workshop__library-version-label">
+                    {{ $tt('video.longVideoSceneLibraryVersionSelect') }}
+                  </span>
+                  <DqSelect
+                    :model-value="selectedScene.library_version ?? ''"
+                    size="sm"
+                    class="lv-scene-workshop__library-version-select"
+                    :loading="libraryVersionsLoading"
+                    :disabled="libraryVersionsLoading || librarySwitching"
+                    @update:model-value="onLibraryVersionSelect"
+                  >
+                    <DqOption
+                      v-for="v in libraryVersions"
+                      :key="v.version"
+                      :label="libraryVersionOptionLabel(v)"
+                      :value="v.version"
+                    />
+                  </DqSelect>
+                </label>
+              </template>
+              <span
+                v-else-if="selectedScene.library_version && selectedAssetStatus === 'draft'"
+                class="lv-scene-workshop__based-on"
+              >
+                {{ $tt('video.longVideoAssetStatusBasedOn', { v: selectedScene.library_version }) }}
+              </span>
+              <DqButton
+                v-if="selectedAssetStatus === 'draft'"
+                size="sm"
+                type="default"
+                :loading="librarySaving"
+                @click="emit('save-draft', selectedScene.id)"
+              >
+                {{ $tt('video.longVideoAssetSaveDraft') }}
+              </DqButton>
+              <DqButton
+                v-if="selectedAssetStatus === 'draft'"
+                size="sm"
+                type="primary"
+                :loading="libraryPublishing"
+                @click="emit('finalize-asset', selectedScene.id)"
+              >
+                {{ $tt('video.longVideoAssetFinalize') }}
+              </DqButton>
+              <DqButton
+                v-if="selectedAssetStatus === 'final'"
+                size="sm"
+                type="primary"
+                @click="emit('fork-draft', selectedScene.id)"
+              >
+                {{ $tt('video.longVideoAssetForkDraft') }}
+              </DqButton>
+            </div>
+            <DqButton
+              v-if="canRestoreFromSeries"
+              size="sm"
+              type="text"
+              @click="emit('restore-series-master', selectedScene?.id)"
+            >
+              {{ $tt('video.longVideoRestoreSeriesMaster') }}
+            </DqButton>
+            <DqButton
+              v-if="canPromoteSelectedToSeries"
+              size="sm"
+              type="text"
+              @click="emit('promote-to-series', selectedScene!.id)"
+            >
+              {{ $tt('video.longVideoPromoteSceneToSeries') }}
+            </DqButton>
+            <DqButton type="primary" size="sm" @click="addLook(selectedIndex)">
               <DqIcon :size="12"><Plus /></DqIcon>
               {{ $tt('video.longVideoSceneAddVariant') }}
             </DqButton>
             <DqIconButton
+              v-if="!identityLocked"
               type="text"
               size="sm"
               class="lv-scene-workshop__detail-delete"
@@ -217,7 +259,10 @@
               >
                 <DqIcon :size="20"><Loading /></DqIcon>
               </div>
-              <div v-if="lk.reference_asset_id" class="lv-scene-workshop__look-ref-overlay">
+              <div
+                v-if="lk.reference_asset_id && !isLookLocked(lk)"
+                class="lv-scene-workshop__look-ref-overlay"
+              >
                 <button
                   type="button"
                   class="lv-scene-workshop__look-overlay-btn"
@@ -244,6 +289,7 @@
                   :model-value="lk.label"
                   size="sm"
                   class="lv-scene-workshop__look-label"
+                  :disabled="isLookLocked(lk)"
                   :placeholder="formatSceneLookOptionLabel(lk, uiLocale)"
                   @update:model-value="onLookLabel(selectedIndex, li, $event)"
                 />
@@ -256,6 +302,7 @@
                   :rows="3"
                   size="sm"
                   class="lv-scene-workshop__look-desc"
+                  :disabled="isLookLocked(lk)"
                   :placeholder="$tt('video.longVideoSceneBodyPh')"
                   @update:model-value="onLookBody(selectedIndex, li, $event)"
                 />
@@ -268,6 +315,7 @@
                   :rows="2"
                   size="sm"
                   class="lv-scene-workshop__look-vision"
+                  :disabled="isLookLocked(lk)"
                   :placeholder="$tt('video.longVideoSceneVisionDescriptionExamplePh')"
                   @update:model-value="onLookVisionDescription(selectedIndex, li, $event)"
                 />
@@ -275,7 +323,19 @@
             </div>
 
             <footer class="lv-scene-workshop__look-foot">
+              <span
+                v-if="showLibraryControls"
+                class="lv-scene-workshop__look-status"
+                :class="isLookLocked(lk) ? 'is-final' : 'is-draft'"
+              >
+                {{
+                  isLookLocked(lk)
+                    ? $tt('video.longVideoAssetStatusFinal')
+                    : $tt('video.longVideoAssetStatusDraft')
+                }}
+              </span>
               <DqButton
+                v-if="!isLookLocked(lk)"
                 size="sm"
                 type="primary"
                 :loading="refGeneratingKey === refKey(selectedIndex, li)"
@@ -285,7 +345,7 @@
                 {{ $tt('video.longVideoSceneRefGenerate') }}
               </DqButton>
               <DqButton
-                v-if="!lk.reference_asset_id"
+                v-if="!isLookLocked(lk) && !lk.reference_asset_id"
                 size="sm"
                 type="default"
                 :disabled="batchGenerating || refGeneratingKey != null"
@@ -294,7 +354,7 @@
                 {{ $tt('video.longVideoSceneRefImport') }}
               </DqButton>
               <DqButton
-                v-if="lk.reference_asset_id"
+                v-if="!isLookLocked(lk) && lk.reference_asset_id"
                 size="sm"
                 type="text"
                 :loading="visionBackfillKey === refKey(selectedIndex, li)"
@@ -302,8 +362,24 @@
               >
                 {{ $tt('video.longVideoSceneVisionBackfill') }}
               </DqButton>
+              <DqButton
+                v-if="showLibraryControls && !isLookLocked(lk)"
+                size="sm"
+                type="default"
+                @click="emit('finalize-look', selectedScene.id, lk.id)"
+              >
+                {{ $tt('video.longVideoAssetFinalizeSceneLook') }}
+              </DqButton>
+              <DqButton
+                v-if="canPromoteLook(selectedScene.id, lk.id)"
+                size="sm"
+                type="text"
+                @click="emit('promote-look-to-series', selectedScene.id, lk.id)"
+              >
+                {{ $tt('video.longVideoPromoteLookToSeries') }}
+              </DqButton>
               <DqIconButton
-                v-if="selectedScene.looks.length > 1"
+                v-if="selectedScene.looks.length > 1 && !isLookLocked(lk)"
                 type="text"
                 size="sm"
                 class="lv-scene-workshop__look-remove"
@@ -326,15 +402,6 @@
       </div>
     </div>
 
-    <footer v-if="scriptParsed && scenes.length" class="lv-scene-workshop__next">
-      <div class="lv-scene-workshop__next-copy">
-        <span class="lv-scene-workshop__next-kicker">{{ $tt('video.longVideoSceneNextTitle') }}</span>
-        <p class="lv-scene-workshop__next-text">{{ $tt('video.longVideoSceneNextStoryboard') }}</p>
-      </div>
-      <DqButton type="primary" @click="emit('go-to-storyboard')">
-        {{ $tt('video.longVideoCastNextStoryboardBtn') }}
-      </DqButton>
-    </footer>
   </section>
 </template>
 
@@ -344,7 +411,13 @@ import { useI18n } from 'vue-i18n';
 import { Close, Delete, Loading, PictureFilled, Plus } from '@danqing/dq-shell';
 import LongVideoEntityRelatedTasks from './LongVideoEntityRelatedTasks.vue';
 import { api } from '@/utils/api';
-import type { LongVideoScene } from '@/types';
+import type { LibraryEntityVersion, LongVideoScene } from '@/types';
+import {
+  libraryVersionStatus,
+  sceneAssetStatus,
+  sceneLookStatus,
+} from '@/utils/longVideoLibrary';
+import type { LongVideoSceneLook } from '@/types';
 import {
   createSceneEntry,
   createSceneLookEntry,
@@ -360,30 +433,41 @@ const props = defineProps<{
   visionBackfillKey?: string | null;
   batchGenerating?: boolean;
   seriesLinked?: boolean;
-  assetEditScope?: 'episode' | 'series';
   canRestoreFromSeries?: boolean;
   promotableSceneIds?: string[];
-  showLibraryPublish?: boolean;
-  publishingLibrary?: boolean;
+  promotableLookIds?: Record<string, string[]>;
+  episodeOnlySceneIds?: string[];
+  showLibraryControls?: boolean;
+  libraryPublishing?: boolean;
+  librarySaving?: boolean;
+  librarySwitching?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'update:scenes', value: LongVideoScene[]): void;
-  (e: 'update:assetEditScope', value: 'episode' | 'series'): void;
   (e: 'restore-series-master', sceneId?: string): void;
   (e: 'promote-to-series', sceneId: string): void;
-  (e: 'publish-library-version', sceneId?: string): void;
+  (e: 'promote-look-to-series', sceneId: string, lookId: string): void;
+  (e: 'switch-library-version', sceneId: string, version: number): void;
+  (e: 'save-draft', sceneId: string): void;
+  (e: 'finalize-asset', sceneId: string): void;
+  (e: 'finalize-look', sceneId: string, lookId: string): void;
+  (e: 'fork-draft', sceneId: string): void;
   (e: 'generate-ref', sceneIndex: number, lookIndex: number): void;
   (e: 'pick-ref-gallery', sceneIndex: number, lookIndex: number): void;
   (e: 'clear-ref', sceneIndex: number, lookIndex: number): void;
   (e: 'vision-backfill', sceneIndex: number, lookIndex: number): void;
   (e: 'batch-generate-refs'): void;
-  (e: 'go-to-storyboard'): void;
   (e: 'go-to-script'): void;
 }>();
 
 const seriesLinked = computed(() => Boolean(props.seriesLinked));
-const assetEditScope = computed(() => props.assetEditScope ?? 'episode');
+const showLibraryControls = computed(() => Boolean(props.showLibraryControls));
+const libraryPublishing = computed(() => Boolean(props.libraryPublishing));
+const librarySaving = computed(() => Boolean(props.librarySaving));
+const librarySwitching = computed(() => Boolean(props.librarySwitching));
+const libraryVersions = ref<LibraryEntityVersion[]>([]);
+const libraryVersionsLoading = ref(false);
 
 const { t: $tt, locale } = useI18n();
 const uiLocale = computed(() => (locale.value.startsWith('zh') ? 'zh' : 'en'));
@@ -401,11 +485,101 @@ const readyRefCount = computed(() =>
 );
 const selectedScene = computed(() => props.scenes[selectedIndex.value] ?? null);
 
+const selectedAssetStatus = computed(() =>
+  selectedScene.value ? sceneAssetStatus(selectedScene.value) : 'draft',
+);
+
+const identityLocked = computed(
+  () => showLibraryControls.value && selectedAssetStatus.value === 'final',
+);
+
+function isLookLocked(look: LongVideoSceneLook): boolean {
+  if (!showLibraryControls.value) return false;
+  return sceneLookStatus(look) === 'final';
+}
+
+const isSelectedEpisodeOnly = computed(() => {
+  const id = selectedScene.value?.id;
+  if (!id) return false;
+  return (props.episodeOnlySceneIds ?? props.promotableSceneIds ?? []).includes(id);
+});
+
+const identityReadOnly = computed(
+  () =>
+    seriesLinked.value
+    && Boolean(selectedScene.value)
+    && !isSelectedEpisodeOnly.value,
+);
+
 const canPromoteSelectedToSeries = computed(() => {
   const id = selectedScene.value?.id;
-  if (!id || assetEditScope.value !== 'episode') return false;
+  if (!id || !seriesLinked.value) return false;
   return (props.promotableSceneIds ?? []).includes(id);
 });
+
+const canRestoreFromSeries = computed(
+  () =>
+    seriesLinked.value
+    && Boolean(props.canRestoreFromSeries)
+    && Boolean(selectedScene.value)
+    && !isSelectedEpisodeOnly.value,
+);
+
+function canPromoteLook(sceneId: string, lookId: string): boolean {
+  if (!seriesLinked.value) return false;
+  return (props.promotableLookIds?.[sceneId] ?? []).includes(lookId);
+}
+
+function libraryVersionOptionLabel(v: LibraryEntityVersion): string {
+  const status = libraryVersionStatus(v);
+  const statusLabel =
+    status === 'final'
+      ? $tt('video.longVideoAssetStatusFinal')
+      : $tt('video.longVideoAssetStatusDraft');
+  const current = selectedScene.value?.library_version;
+  if (current === v.version) {
+    return $tt('video.longVideoLibraryVersionOptionCurrent', {
+      v: v.version,
+      status: statusLabel,
+    });
+  }
+  return $tt('video.longVideoLibraryVersionOption', { v: v.version, status: statusLabel });
+}
+
+async function loadLibraryVersions(entityId: string | undefined) {
+  if (!showLibraryControls.value || !entityId) {
+    libraryVersions.value = [];
+    return;
+  }
+  libraryVersionsLoading.value = true;
+  try {
+    libraryVersions.value = await api.library.listSceneVersions(entityId);
+  } catch {
+    libraryVersions.value = [];
+  } finally {
+    libraryVersionsLoading.value = false;
+  }
+}
+
+function onLibraryVersionSelect(value: unknown) {
+  const sc = selectedScene.value;
+  const version = Number(value);
+  if (!sc?.library_entity_id || !Number.isFinite(version) || version <= 0) return;
+  if (version === sc.library_version) return;
+  emit('switch-library-version', sc.id, version);
+}
+
+watch(
+  () => [showLibraryControls.value, selectedScene.value?.library_entity_id, selectedScene.value?.library_version] as const,
+  ([enabled, entityId]) => {
+    if (!enabled) {
+      libraryVersions.value = [];
+      return;
+    }
+    void loadLibraryVersions(entityId);
+  },
+  { immediate: true },
+);
 
 const scriptSourceLabel = computed(() => {
   if (!props.scriptParsed) return '';
@@ -946,10 +1120,85 @@ function onLookVisionDescription(si: number, li: number, visionDescription: stri
 .lv-scene-workshop__detail-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
   padding-left: 12px;
   border-left: 0.5px solid color-mix(in srgb, var(--dq-border-subtle) 80%, transparent);
+}
+
+.lv-scene-workshop__library-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lv-scene-workshop__library-version {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lv-scene-workshop__library-version-label {
+  font-size: 11px;
+  color: var(--dq-label-tertiary);
+  white-space: nowrap;
+}
+
+.lv-scene-workshop__library-version-select {
+  min-width: 112px;
+}
+
+.lv-scene-workshop__status-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.lv-scene-workshop__status-badge.is-draft {
+  color: var(--dq-label-secondary);
+  background: color-mix(in srgb, var(--dq-fill-control) 70%, transparent);
+  border: 0.5px solid var(--dq-border-subtle);
+}
+
+.lv-scene-workshop__status-badge.is-final {
+  color: color-mix(in srgb, var(--dq-accent) 90%, white);
+  background: color-mix(in srgb, var(--dq-accent) 14%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--dq-accent) 35%, transparent);
+}
+
+.lv-scene-workshop__based-on {
+  font-size: 11px;
+  color: var(--dq-label-tertiary);
+  white-space: nowrap;
+}
+
+.lv-scene-workshop__look-status {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.lv-scene-workshop__look-status.is-draft {
+  color: var(--dq-label-secondary);
+  background: color-mix(in srgb, var(--dq-fill-control) 70%, transparent);
+  border: 0.5px solid var(--dq-border-subtle);
+}
+
+.lv-scene-workshop__look-status.is-final {
+  color: color-mix(in srgb, var(--dq-accent) 90%, white);
+  background: color-mix(in srgb, var(--dq-accent) 14%, transparent);
+  border: 0.5px solid color-mix(in srgb, var(--dq-accent) 35%, transparent);
 }
 
 .lv-scene-workshop__detail-delete {
@@ -1133,10 +1382,9 @@ function onLookVisionDescription(si: number, li: number, visionDescription: stri
 
 .lv-scene-workshop__field-label {
   font-size: var(--dq-font-size-caption);
-  font-weight: 650;
-  letter-spacing: var(--dq-tracking-wide);
-  text-transform: uppercase;
-  color: var(--dq-label-tertiary);
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--dq-label-secondary);
 }
 
 .lv-scene-workshop__look-desc :deep(textarea) {
@@ -1158,40 +1406,6 @@ function onLookVisionDescription(si: number, li: number, visionDescription: stri
 .lv-scene-workshop__look-remove {
   margin-left: auto;
   color: var(--dq-label-tertiary);
-}
-
-.lv-scene-workshop__next {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-shrink: 0;
-  padding: 14px 16px;
-  margin-top: auto;
-  border-radius: 12px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--dq-accent) 16%, transparent) 0%,
-    color-mix(in srgb, var(--dq-accent) 6%, transparent) 100%
-  );
-  border: 1px solid color-mix(in srgb, var(--dq-accent) 30%, var(--dq-border-subtle));
-}
-
-.lv-scene-workshop__next-kicker {
-  display: block;
-  font-size: var(--dq-font-size-caption);
-  font-weight: 700;
-  letter-spacing: var(--dq-tracking-widest);
-  text-transform: uppercase;
-  color: var(--dq-accent);
-  margin-bottom: 4px;
-}
-
-.lv-scene-workshop__next-text {
-  margin: 0;
-  font-size: var(--dq-font-size-caption);
-  line-height: 1.45;
-  color: var(--dq-label-secondary);
 }
 
 @media (max-width: 900px) {

@@ -61,7 +61,7 @@
                   @update:model-value="onDurationChange"
                 >
                   <DqOption
-                    v-for="sec in durationChoices"
+                    v-for="sec in targetDurationOptions"
                     :key="sec"
                     :label="$tt('video.longVideoTargetDurationSec', { sec })"
                     :value="sec"
@@ -149,7 +149,7 @@
                 {{ parsing ? parseProgressButtonLabel : parseButtonLabel }}
               </DqButton>
               <DqButton
-                v-if="scriptParsed"
+                v-if="scriptParsed && !scriptPipeline"
                 type="primary"
                 size="sm"
                 :loading="Boolean(generatingStoryboard)"
@@ -403,17 +403,6 @@
               </div>
             </div>
 
-            <div class="lv-script-studio__next">
-              <div class="lv-script-studio__next-copy">
-                <span class="lv-script-studio__next-kicker">{{ $tt('video.longVideoScriptNextTitle') }}</span>
-                <p class="lv-script-studio__next-text">{{ $tt('video.longVideoScriptNextCast') }}</p>
-              </div>
-              <div class="lv-script-studio__next-actions">
-                <DqButton type="primary" @click="emit('go-to-cast')">
-                  {{ $tt('video.longVideoScriptNextCastBtn') }}
-                </DqButton>
-              </div>
-            </div>
           </div>
         </template>
       </aside>
@@ -442,7 +431,7 @@ import {
   splitSynopsisMood,
   type ParsedSceneBeat,
 } from '@/utils/longVideoSceneBeat';
-import { allocateShotDurations } from '@/utils/longVideoProject';
+import { allocateShotDurations, SEGMENT_DURATION_CHOICES } from '@/utils/longVideoProject';
 import { suggestScriptExpand } from '@/utils/llmMessages';
 import { resumeStageFromPipeline } from '@/utils/scriptPipeline';
 import LongVideoParseRunBar from './LongVideoParseRunBar.vue';
@@ -492,7 +481,6 @@ const emit = defineEmits<{
   (e: 'generate-storyboard'): void;
   (e: 'regenerate-beat', beatIndex: number): void;
   (e: 'clear-parse-blocked'): void;
-  (e: 'go-to-cast'): void;
   (e: 'approve-facts'): void;
   (e: 'approve-shots'): void;
   (e: 'generate-shots'): void;
@@ -563,12 +551,12 @@ const llmModelOptions = computed(() => {
     .sort((a, b) => a.label.localeCompare(b.label));
 });
 
-const durationChoices = [45, 60, 90, 120] as const;
-const segmentDurationChoices = [4, 5, 8] as const;
+const durationChoices = [45, 60, 90, 120, 180, 240] as const;
+const segmentDurationChoices = SEGMENT_DURATION_CHOICES;
 
 function nearestChoice(value: number, choices: readonly number[], fallback: number): number {
   if (!Number.isFinite(value) || value <= 0) return fallback;
-  if (choices.includes(value)) return value;
+  if ((choices as readonly number[]).includes(value)) return value;
   let best = choices[0] ?? fallback;
   let bestDist = Math.abs(best - value);
   for (const c of choices) {
@@ -581,9 +569,19 @@ function nearestChoice(value: number, choices: readonly number[], fallback: numb
   return best;
 }
 
-const targetDurationSelectValue = computed(() =>
-  nearestChoice(props.targetDurationSec, durationChoices, 60),
-);
+/** Keep select in sync with project value (settings may set custom seconds). */
+const targetDurationOptions = computed(() => {
+  const cur = Number(props.targetDurationSec);
+  const set = new Set<number>(durationChoices);
+  if (Number.isFinite(cur) && cur > 0) set.add(Math.round(cur));
+  return Array.from(set).sort((a, b) => a - b);
+});
+
+const targetDurationSelectValue = computed(() => {
+  const cur = Number(props.targetDurationSec);
+  if (Number.isFinite(cur) && cur > 0) return Math.round(cur);
+  return 60;
+});
 const segmentDurationSelectValue = computed(() =>
   nearestChoice(props.segmentDurationSec, segmentDurationChoices, 5),
 );
@@ -1032,7 +1030,9 @@ async function onFileSelected(event: Event) {
 
 .lv-script-studio__parse-field-label {
   font-size: var(--dq-font-size-caption);
-  color: var(--dq-label-tertiary);
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--dq-label-secondary);
   white-space: nowrap;
 }
 
@@ -1168,14 +1168,6 @@ async function onFileSelected(event: Event) {
 .lv-script-studio__composer-foot-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.lv-script-studio__next-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
   gap: 8px;
   flex-shrink: 0;
 }
@@ -1553,39 +1545,6 @@ async function onFileSelected(event: Event) {
   font-size: var(--dq-font-size-caption);
   line-height: 1.45;
   color: var(--dq-label-tertiary);
-}
-
-.lv-script-studio__next {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px;
-  margin-top: auto;
-  border-radius: 12px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--dq-accent) 16%, transparent) 0%,
-    color-mix(in srgb, var(--dq-accent) 6%, transparent) 100%
-  );
-  border: 1px solid color-mix(in srgb, var(--dq-accent) 30%, var(--dq-border-subtle));
-}
-
-.lv-script-studio__next-kicker {
-  display: block;
-  font-size: var(--dq-font-size-caption);
-  font-weight: 700;
-  letter-spacing: var(--dq-tracking-widest);
-  text-transform: uppercase;
-  color: var(--dq-accent);
-  margin-bottom: 4px;
-}
-
-.lv-script-studio__next-text {
-  margin: 0;
-  font-size: var(--dq-font-size-caption);
-  line-height: 1.45;
-  color: var(--dq-label-secondary);
 }
 
 @media (max-width: 960px) {

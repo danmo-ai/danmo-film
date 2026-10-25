@@ -155,6 +155,48 @@ const overridePromote = promoteEpisodeCharacterToSeries(
 );
 assert(overridePromote.series.characters[0].name === '林总', 'promote updates series master fields');
 assert(overridePromote.series.characters[0].looks[0].body === '红裙', 'promote updates look body');
-assert(!overridePromote.characterVariants.c1, 'promote clears overrides');
+assert(!overridePromote.characterVariants.c1, 'promote clears shared-look overrides');
+
+// Episode scope: identity patches dropped when looksAndDefaultOnly
+const identityLocked = diffCharacterAgainstSeries(
+  baseChars[0],
+  { ...baseChars[0], name: '改名', role: 'protagonist', default_look_id: 'l1' },
+  { looksAndDefaultOnly: true },
+);
+assert(!identityLocked || identityLocked.name === undefined, 'RO identity: name not patched');
+assert(!identityLocked || identityLocked.role === undefined, 'RO identity: role not patched');
+
+// Character promote leaves episode_only looks on episode
+const withEpLook = promoteEpisodeCharacterToSeries(
+  series,
+  {
+    ...baseChars[0],
+    looks: [
+      ...baseChars[0].looks,
+      { id: 'l_ep_new', label: '本集铠甲', body: '铁甲' },
+    ],
+  },
+  {
+    c1: {
+      character_id: 'c1',
+      looks: [
+        {
+          look_id: 'l_ep_new',
+          episode_only: true,
+          label: '本集铠甲',
+          body: '铁甲',
+        },
+      ],
+    },
+  },
+);
+assert(
+  !withEpLook.series.characters[0].looks.some((lk) => lk.id === 'l_ep_new'),
+  'character promote does not auto-promote episode_only look',
+);
+assert(
+  withEpLook.characterVariants.c1?.looks?.some((lk) => lk.look_id === 'l_ep_new' && lk.episode_only),
+  'episode_only look stays on episode after character promote',
+);
 
 console.log('longVideoSeries.unit: ok');

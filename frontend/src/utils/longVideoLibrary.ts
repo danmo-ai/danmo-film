@@ -4,6 +4,7 @@
 
 import type {
   LibraryEntityVersion,
+  LongVideoAssetStatus,
   LongVideoCharacter,
   LongVideoCharacterLook,
   LongVideoScene,
@@ -13,6 +14,50 @@ import type {
 } from '@/types';
 import { newStableId } from './longVideoSeries';
 
+/**
+ * Status lives on the **library version** (`definition.version_status`).
+ * Roster `asset_status` is only the working mode: viewing a final pin vs editing a draft.
+ */
+export function libraryVersionStatus(
+  row: Pick<LibraryEntityVersion, 'definition'> | Record<string, unknown>,
+): LongVideoAssetStatus {
+  const def =
+    'definition' in row && row.definition && typeof row.definition === 'object'
+      ? (row.definition as Record<string, unknown>)
+      : (row as Record<string, unknown>);
+  const s = def.version_status;
+  if (s === 'draft' || s === 'final') return s;
+  // Legacy library rows (pre-status) are treated as finalized.
+  return 'final';
+}
+
+export function withLibraryVersionStatus(
+  definition: Record<string, unknown>,
+  status: LongVideoAssetStatus,
+): Record<string, unknown> {
+  return { ...definition, version_status: status };
+}
+
+/** Working mode on the project roster row (not the version itself). */
+export function characterAssetStatus(ch: Pick<LongVideoCharacter, 'asset_status' | 'library_entity_id' | 'library_version'>): LongVideoAssetStatus {
+  if (ch.asset_status === 'draft' || ch.asset_status === 'final') return ch.asset_status;
+  return ch.library_entity_id && ch.library_version ? 'final' : 'draft';
+}
+
+export function sceneAssetStatus(sc: Pick<LongVideoScene, 'asset_status' | 'library_entity_id' | 'library_version'>): LongVideoAssetStatus {
+  if (sc.asset_status === 'draft' || sc.asset_status === 'final') return sc.asset_status;
+  return sc.library_entity_id && sc.library_version ? 'final' : 'draft';
+}
+
+/** Open a locked final pin as an editable draft (定稿 writes a new final version). */
+export function forkCharacterDraft(ch: LongVideoCharacter): LongVideoCharacter {
+  return { ...ch, asset_status: 'draft' };
+}
+
+export function forkSceneDraft(sc: LongVideoScene): LongVideoScene {
+  return { ...sc, asset_status: 'draft' };
+}
+
 export type LibraryApi = {
   createCharacter(definition: Record<string, unknown>): Promise<LibraryEntityVersion>;
   getCharacter(entityId: string, version?: number): Promise<LibraryEntityVersion>;
@@ -21,10 +66,12 @@ export type LibraryApi = {
     definition: Record<string, unknown>,
   ): Promise<LibraryEntityVersion>;
   listCharacters(limit?: number): Promise<LibraryEntityVersion[]>;
+  listCharacterVersions(entityId: string): Promise<LibraryEntityVersion[]>;
   createScene(definition: Record<string, unknown>): Promise<LibraryEntityVersion>;
   getScene(entityId: string, version?: number): Promise<LibraryEntityVersion>;
   newSceneVersion(entityId: string, definition: Record<string, unknown>): Promise<LibraryEntityVersion>;
   listScenes(limit?: number): Promise<LibraryEntityVersion[]>;
+  listSceneVersions(entityId: string): Promise<LibraryEntityVersion[]>;
 };
 
 export type LibraryUpdateRow = {
@@ -35,6 +82,10 @@ export type LibraryUpdateRow = {
   lockedVersion: number;
   latestVersion: number;
 };
+
+function lookStatusFromDef(raw: unknown): LongVideoAssetStatus {
+  return raw === 'draft' ? 'draft' : 'final';
+}
 
 function looksFromDef(raw: unknown): LongVideoCharacterLook[] {
   if (!Array.isArray(raw)) return [];
@@ -52,6 +103,8 @@ function looksFromDef(raw: unknown): LongVideoCharacterLook[] {
           o.reference_asset_id != null ? String(o.reference_asset_id) : undefined,
         lora_id: o.lora_id != null ? String(o.lora_id) : undefined,
         portrait_prompt: o.portrait_prompt != null ? String(o.portrait_prompt) : undefined,
+        // Library snapshots: missing status ⇒ finalized look.
+        look_status: lookStatusFromDef(o.look_status),
       };
     });
 }
@@ -72,8 +125,64 @@ function sceneLooksFromDef(raw: unknown): LongVideoSceneLook[] {
           o.reference_asset_id != null ? String(o.reference_asset_id) : undefined,
         environment_prompt:
           o.environment_prompt != null ? String(o.environment_prompt) : undefined,
+        look_status: lookStatusFromDef(o.look_status),
       };
     });
+}
+
+/** Resolve look lock. Explicit final is locked; draft or missing stays editable. */
+export function characterLookStatus(
+  look: Pick<LongVideoCharacterLook, 'look_status'>,
+): LongVideoAssetStatus {
+  return look.look_status === 'final' ? 'final' : 'draft';
+}
+
+export function sceneLookStatus(
+  look: Pick<LongVideoSceneLook, 'look_status'>,
+): LongVideoAssetStatus {
+  return look.look_status === 'final' ? 'final' : 'draft';
+}
+
+export function finalizeCharacterLook(
+  ch: LongVideoCharacter,
+  lookId: string,
+): LongVideoCharacter {
+  return {
+    ...ch,
+    looks: ch.looks.map((lk) =>
+      lk.id === lookId ? { ...lk, look_status: 'final' as const } : lk,
+    ),
+  };
+}
+
+export function finalizeSceneLook(sc: LongVideoScene, lookId: string): LongVideoScene {
+  return {
+    ...sc,
+    looks: sc.looks.map((lk) =>
+      lk.id === lookId ? { ...lk, look_status: 'final' as const } : lk,
+    ),
+  };
+}
+
+/** Character/scene finalize: lock every look included in this version snapshot. */
+export function freezeAllCharacterLooks(ch: LongVideoCharacter): LongVideoCharacter {
+  return {
+    ...ch,
+    looks: ch.looks.map((lk) => ({ ...lk, look_status: 'final' as const })),
+  };
+}
+
+export function freezeAllSceneLooks(sc: LongVideoScene): LongVideoScene {
+  return {
+    ...sc,
+    looks: sc.looks.map((lk) => ({ ...lk, look_status: 'final' as const })),
+  };
+}
+
+function persistLookStatus(
+  look: Pick<LongVideoCharacterLook | LongVideoSceneLook, 'look_status'>,
+): LongVideoAssetStatus {
+  return look.look_status === 'draft' ? 'draft' : 'final';
 }
 
 export function characterDefinitionFromRoster(ch: LongVideoCharacter): Record<string, unknown> {
@@ -89,7 +198,8 @@ export function characterDefinitionFromRoster(ch: LongVideoCharacter): Record<st
     voice_manner: ch.voice_manner ?? '',
     performance_notes: ch.performance_notes ?? '',
     identity_notes: ch.identity_notes ?? '',
-    looks: ch.looks,
+    // Preserve per-look status so draft looks on a final character stay editable.
+    looks: ch.looks.map((lk) => ({ ...lk, look_status: persistLookStatus(lk) })),
     default_look_id: ch.default_look_id,
   };
 }
@@ -98,7 +208,7 @@ export function sceneDefinitionFromRoster(sc: LongVideoScene): Record<string, un
   return {
     roster_id: sc.id,
     name: sc.name,
-    looks: sc.looks,
+    looks: sc.looks.map((lk) => ({ ...lk, look_status: persistLookStatus(lk) })),
     default_look_id: sc.default_look_id,
     spatial_layout_json: sc.spatial_layout_json ?? null,
     grounding_panorama_asset_id: sc.grounding_panorama_asset_id ?? null,
@@ -142,6 +252,7 @@ export function characterFromLibraryDefinition(
     identity_notes: str('identity_notes') || undefined,
     library_entity_id: entityId,
     library_version: version,
+    asset_status: 'final',
   };
 }
 
@@ -175,6 +286,7 @@ export function sceneFromLibraryDefinition(
     weather: def.weather != null ? String(def.weather) : undefined,
     library_entity_id: entityId,
     library_version: version,
+    asset_status: 'final',
   };
 }
 
@@ -320,26 +432,38 @@ export async function publishCharacterToLibrary(
   ch: LongVideoCharacter,
   library: LibraryApi,
 ): Promise<LongVideoCharacter> {
-  const def = characterDefinitionFromRoster(ch);
+  const def = withLibraryVersionStatus(characterDefinitionFromRoster(ch), 'final');
   if (!ch.library_entity_id) {
     const row = await library.createCharacter(def);
-    return characterFromLibraryDefinition(row.definition, row.entity_id, row.version, ch.id);
+    return {
+      ...characterFromLibraryDefinition(row.definition, row.entity_id, row.version, ch.id),
+      asset_status: 'final',
+    };
   }
   const row = await library.newCharacterVersion(ch.library_entity_id, def);
-  return characterFromLibraryDefinition(row.definition, row.entity_id, row.version, ch.id);
+  return {
+    ...characterFromLibraryDefinition(row.definition, row.entity_id, row.version, ch.id),
+    asset_status: 'final',
+  };
 }
 
 export async function publishSceneToLibrary(
   sc: LongVideoScene,
   library: LibraryApi,
 ): Promise<LongVideoScene> {
-  const def = sceneDefinitionFromRoster(sc);
+  const def = withLibraryVersionStatus(sceneDefinitionFromRoster(sc), 'final');
   if (!sc.library_entity_id) {
     const row = await library.createScene(def);
-    return sceneFromLibraryDefinition(row.definition, row.entity_id, row.version, sc.id);
+    return {
+      ...sceneFromLibraryDefinition(row.definition, row.entity_id, row.version, sc.id),
+      asset_status: 'final',
+    };
   }
   const row = await library.newSceneVersion(sc.library_entity_id, def);
-  return sceneFromLibraryDefinition(row.definition, row.entity_id, row.version, sc.id);
+  return {
+    ...sceneFromLibraryDefinition(row.definition, row.entity_id, row.version, sc.id),
+    asset_status: 'final',
+  };
 }
 
 /** Load series, migrate unlinked roster rows to library once, persist when changed. */

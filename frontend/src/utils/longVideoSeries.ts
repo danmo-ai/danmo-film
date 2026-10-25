@@ -442,9 +442,8 @@ export function promoteCharacterLookToSeries(
 }
 
 /**
- * Write the effective episode character into the project shared roster and
- * clear that character's episode variants. Adds the character when it only
- * existed on the episode.
+ * Write identity (+ already-shared looks) into the project shared roster.
+ * Episode-only looks stay on the episode until look-promote.
  */
 export function promoteEpisodeCharacterToSeries(
   series: LongVideoSeriesState,
@@ -454,17 +453,53 @@ export function promoteEpisodeCharacterToSeries(
   series: LongVideoSeriesState;
   characterVariants: Record<string, LongVideoCharacterVariant>;
 } {
+  const prev = characterVariants?.[effective.id];
+  const epOnlyLookIds = new Set(
+    (prev?.looks ?? []).filter((lk) => lk.episode_only).map((lk) => lk.look_id),
+  );
+  let seriesLooks = effective.looks.filter((lk) => !epOnlyLookIds.has(lk.id));
+  let remainingEpLooks = (prev?.looks ?? []).filter((lk) => lk.episode_only);
+
+  // Brand-new episode_only: seed series with the default look so the master is usable.
+  if (seriesLooks.length === 0 && effective.looks.length > 0) {
+    const seedId = effective.default_look_id || effective.looks[0].id;
+    const seed = effective.looks.find((lk) => lk.id === seedId) || effective.looks[0];
+    seriesLooks = [{ ...seed }];
+    remainingEpLooks = remainingEpLooks.filter((lk) => lk.look_id !== seed.id);
+  }
+
+  const defaultLookId =
+    seriesLooks.find((lk) => lk.id === effective.default_look_id)?.id
+    ?? seriesLooks[0]?.id
+    ?? effective.default_look_id;
+
   const chars = [...(series.characters ?? [])];
   const idx = chars.findIndex((c) => c.id === effective.id);
   const nextChar: LongVideoCharacter = {
     ...effective,
-    looks: effective.looks.map((lk) => ({ ...lk })),
+    default_look_id: defaultLookId,
+    looks: seriesLooks.map((lk) => ({ ...lk })),
   };
   if (idx >= 0) chars[idx] = nextChar;
   else chars.push(nextChar);
+
+  const nextVariants = { ...(characterVariants ?? {}) };
+  if (remainingEpLooks.length) {
+    nextVariants[effective.id] = {
+      character_id: effective.id,
+      scope: 'episode',
+      looks: remainingEpLooks,
+      ...(remainingEpLooks.some((lk) => lk.look_id === effective.default_look_id)
+        ? { default_look_id: effective.default_look_id }
+        : {}),
+    };
+  } else {
+    delete nextVariants[effective.id];
+  }
+
   return {
     series: { ...series, characters: chars },
-    characterVariants: clearCharacterVariant(characterVariants, effective.id),
+    characterVariants: nextVariants,
   };
 }
 
@@ -477,17 +512,52 @@ export function promoteEpisodeSceneToSeries(
   series: LongVideoSeriesState;
   sceneVariants: Record<string, LongVideoSceneVariant>;
 } {
+  const prev = sceneVariants?.[effective.id];
+  const epOnlyLookIds = new Set(
+    (prev?.looks ?? []).filter((lk) => lk.episode_only).map((lk) => lk.look_id),
+  );
+  let seriesLooks = effective.looks.filter((lk) => !epOnlyLookIds.has(lk.id));
+  let remainingEpLooks = (prev?.looks ?? []).filter((lk) => lk.episode_only);
+
+  if (seriesLooks.length === 0 && effective.looks.length > 0) {
+    const seedId = effective.default_look_id || effective.looks[0].id;
+    const seed = effective.looks.find((lk) => lk.id === seedId) || effective.looks[0];
+    seriesLooks = [{ ...seed }];
+    remainingEpLooks = remainingEpLooks.filter((lk) => lk.look_id !== seed.id);
+  }
+
+  const defaultLookId =
+    seriesLooks.find((lk) => lk.id === effective.default_look_id)?.id
+    ?? seriesLooks[0]?.id
+    ?? effective.default_look_id;
+
   const scenes = [...(series.scenes ?? [])];
   const idx = scenes.findIndex((s) => s.id === effective.id);
   const nextScene: LongVideoScene = {
     ...effective,
-    looks: effective.looks.map((lk) => ({ ...lk })),
+    default_look_id: defaultLookId,
+    looks: seriesLooks.map((lk) => ({ ...lk })),
   };
   if (idx >= 0) scenes[idx] = nextScene;
   else scenes.push(nextScene);
+
+  const nextVariants = { ...(sceneVariants ?? {}) };
+  if (remainingEpLooks.length) {
+    nextVariants[effective.id] = {
+      scene_id: effective.id,
+      scope: 'episode',
+      looks: remainingEpLooks,
+      ...(remainingEpLooks.some((lk) => lk.look_id === effective.default_look_id)
+        ? { default_look_id: effective.default_look_id }
+        : {}),
+    };
+  } else {
+    delete nextVariants[effective.id];
+  }
+
   return {
     series: { ...series, scenes },
-    sceneVariants: clearSceneVariant(sceneVariants, effective.id),
+    sceneVariants: nextVariants,
   };
 }
 
@@ -597,6 +667,8 @@ function sceneLookFieldPatch(
 export function diffCharacterAgainstSeries(
   seriesChar: LongVideoCharacter,
   effectiveChar: LongVideoCharacter,
+  opts?: { /** Episode scope: identity is RO — only look selection / patches. */
+    looksAndDefaultOnly?: boolean },
 ): LongVideoCharacterVariant | null {
   const variant: LongVideoCharacterVariant = {
     character_id: seriesChar.id,
@@ -605,35 +677,38 @@ export function diffCharacterAgainstSeries(
   };
   const lookPatches: LongVideoCharacterLookVariant[] = [];
   let hasCharPatch = false;
+  const looksOnly = Boolean(opts?.looksAndDefaultOnly);
 
-  if (effectiveChar.name !== seriesChar.name) {
-    variant.name = effectiveChar.name;
-    hasCharPatch = true;
-  }
-  if ((effectiveChar.role ?? '') !== (seriesChar.role ?? '')) {
-    variant.role = effectiveChar.role ?? null;
-    hasCharPatch = true;
-  }
-  const aliasesEqual =
-    JSON.stringify(effectiveChar.aliases ?? []) === JSON.stringify(seriesChar.aliases ?? []);
-  if (!aliasesEqual) {
-    variant.aliases = effectiveChar.aliases ?? null;
-    hasCharPatch = true;
-  }
-  const patchStr = (
-    key: 'age_range' | 'gender_presentation' | 'identity_baseline' | 'visual_identity' | 'voice_manner' | 'performance_notes',
-  ) => {
-    if ((effectiveChar[key] ?? '') !== (seriesChar[key] ?? '')) {
-      variant[key] = effectiveChar[key] ?? null;
+  if (!looksOnly) {
+    if (effectiveChar.name !== seriesChar.name) {
+      variant.name = effectiveChar.name;
       hasCharPatch = true;
     }
-  };
-  patchStr('age_range');
-  patchStr('gender_presentation');
-  patchStr('identity_baseline');
-  patchStr('visual_identity');
-  patchStr('voice_manner');
-  patchStr('performance_notes');
+    if ((effectiveChar.role ?? '') !== (seriesChar.role ?? '')) {
+      variant.role = effectiveChar.role ?? null;
+      hasCharPatch = true;
+    }
+    const aliasesEqual =
+      JSON.stringify(effectiveChar.aliases ?? []) === JSON.stringify(seriesChar.aliases ?? []);
+    if (!aliasesEqual) {
+      variant.aliases = effectiveChar.aliases ?? null;
+      hasCharPatch = true;
+    }
+    const patchStr = (
+      key: 'age_range' | 'gender_presentation' | 'identity_baseline' | 'visual_identity' | 'voice_manner' | 'performance_notes',
+    ) => {
+      if ((effectiveChar[key] ?? '') !== (seriesChar[key] ?? '')) {
+        variant[key] = effectiveChar[key] ?? null;
+        hasCharPatch = true;
+      }
+    };
+    patchStr('age_range');
+    patchStr('gender_presentation');
+    patchStr('identity_baseline');
+    patchStr('visual_identity');
+    patchStr('voice_manner');
+    patchStr('performance_notes');
+  }
   if (effectiveChar.default_look_id !== seriesChar.default_look_id) {
     variant.default_look_id = effectiveChar.default_look_id;
     hasCharPatch = true;
@@ -668,6 +743,7 @@ export function diffCharacterAgainstSeries(
 export function diffSceneAgainstSeries(
   seriesScene: LongVideoScene,
   effectiveScene: LongVideoScene,
+  opts?: { looksAndDefaultOnly?: boolean },
 ): LongVideoSceneVariant | null {
   const variant: LongVideoSceneVariant = {
     scene_id: seriesScene.id,
@@ -676,8 +752,9 @@ export function diffSceneAgainstSeries(
   };
   const lookPatches: LongVideoSceneLookVariant[] = [];
   let hasScenePatch = false;
+  const looksOnly = Boolean(opts?.looksAndDefaultOnly);
 
-  if (effectiveScene.name !== seriesScene.name) {
+  if (!looksOnly && effectiveScene.name !== seriesScene.name) {
     variant.name = effectiveScene.name;
     hasScenePatch = true;
   }
@@ -686,22 +763,25 @@ export function diffSceneAgainstSeries(
     hasScenePatch = true;
   }
   if (
-    JSON.stringify(effectiveScene.spatial_layout_json ?? null)
-    !== JSON.stringify(seriesScene.spatial_layout_json ?? null)
+    !looksOnly
+    && JSON.stringify(effectiveScene.spatial_layout_json ?? null)
+      !== JSON.stringify(seriesScene.spatial_layout_json ?? null)
   ) {
     variant.spatial_layout_json = effectiveScene.spatial_layout_json ?? null;
     hasScenePatch = true;
   }
   if (
-    (effectiveScene.grounding_panorama_asset_id ?? '')
-    !== (seriesScene.grounding_panorama_asset_id ?? '')
+    !looksOnly
+    && (effectiveScene.grounding_panorama_asset_id ?? '')
+      !== (seriesScene.grounding_panorama_asset_id ?? '')
   ) {
     variant.grounding_panorama_asset_id = effectiveScene.grounding_panorama_asset_id ?? null;
     hasScenePatch = true;
   }
   if (
-    (effectiveScene.grounding_depth_asset_id ?? '')
-    !== (seriesScene.grounding_depth_asset_id ?? '')
+    !looksOnly
+    && (effectiveScene.grounding_depth_asset_id ?? '')
+      !== (seriesScene.grounding_depth_asset_id ?? '')
   ) {
     variant.grounding_depth_asset_id = effectiveScene.grounding_depth_asset_id ?? null;
     hasScenePatch = true;

@@ -8,8 +8,23 @@
     <span class="lv-step-save__hint">{{ hint }}</span>
     <div class="lv-step-save__actions">
       <span class="lv-step-save__status" :data-status="status">{{ statusLabel }}</span>
-      <DqButton type="primary" size="sm" :loading="loading" @click="$emit('save')">
+      <DqButton
+        :type="nextLabel ? 'default' : 'primary'"
+        size="sm"
+        :loading="loading"
+        @click="$emit('save')"
+      >
         {{ saveLabel }}
+      </DqButton>
+      <DqButton
+        v-if="nextLabel"
+        type="primary"
+        size="sm"
+        :loading="nextLoading"
+        :disabled="nextDisabled"
+        @click="$emit('next')"
+      >
+        {{ nextLabel }}
       </DqButton>
     </div>
   </div>
@@ -23,14 +38,19 @@ withDefaults(
     status: string;
     statusLabel: string;
     loading?: boolean;
+    /** Forward / primary step action shown after Save (e.g. next tab or merge). */
+    nextLabel?: string;
+    nextDisabled?: boolean;
+    nextLoading?: boolean;
     /** When true, sit under content instead of pinning to the pane bottom. */
     flush?: boolean;
   }>(),
-  { flush: false },
+  { flush: false, nextDisabled: false, nextLoading: false },
 );
 
 defineEmits<{
   (e: 'save'): void;
+  (e: 'next'): void;
 }>();
 </script>
 
@@ -42,8 +62,9 @@ defineEmits<{
   gap: 12px;
   flex-shrink: 0;
   margin-top: auto;
-  padding: 10px 0 0;
+  padding: 12px 0;
   border-top: 0.5px solid var(--dq-border-subtle);
+  box-sizing: border-box;
 }
 
 .lv-step-save--flush {

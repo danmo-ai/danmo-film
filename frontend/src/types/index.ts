@@ -273,6 +273,14 @@ export type LongVideoSegmentRole =
 
 export type LongVideoFlfMode = 'none' | 'first_last' | 'continuation';
 
+/**
+ * Version / look publish lifecycle.
+ * - On a library version: draft vs finalized snapshot of identity.
+ * - On a look: draft editable; final locked (may still add new looks on a final character version).
+ * - On roster row `asset_status`: working mode for identity (fork to edit identity).
+ */
+export type LongVideoAssetStatus = 'draft' | 'final';
+
 export interface LongVideoCharacterLook {
   id: string;
   label: string;
@@ -283,6 +291,11 @@ export interface LongVideoCharacterLook {
   reference_asset_id?: string;
   lora_id?: string;
   portrait_prompt?: string;
+  /**
+   * Look-level lifecycle. Final looks are immutable; draft looks can edit.
+   * A finalized character version may still gain new draft looks.
+   */
+  look_status?: LongVideoAssetStatus;
 }
 
 export type LongVideoEditorTab =
@@ -325,6 +338,8 @@ export interface LongVideoCharacter {
   identity_notes?: string;
   library_entity_id?: string;
   library_version?: number;
+  /** Working vs locked; omit = infer from library pin. */
+  asset_status?: LongVideoAssetStatus;
 }
 
 export interface LongVideoSceneLook {
@@ -337,6 +352,8 @@ export interface LongVideoSceneLook {
   reference_asset_id?: string;
   /** Cached T2I prompt for scene reference generation only. */
   environment_prompt?: string;
+  /** Look-level lifecycle; final = immutable. */
+  look_status?: LongVideoAssetStatus;
 }
 
 export interface LongVideoCharacterRelation {
@@ -364,6 +381,8 @@ export interface LongVideoScene {
   weather?: string;
   library_entity_id?: string;
   library_version?: number;
+  /** Working vs locked; omit = infer from library pin. */
+  asset_status?: LongVideoAssetStatus;
 }
 
 export interface LongVideoShotSceneLook {
@@ -963,6 +982,13 @@ export interface LongVideoProjectState {
   character_variants?: Record<string, LongVideoCharacterVariant>;
   /** Per-scene field patches over series shared scenes. */
   scene_variants?: Record<string, LongVideoSceneVariant>;
+  /**
+   * Parse-name / alias → series (or episode_only) character id.
+   * Keys are normalized names, aliases, or incoming parse ids.
+   */
+  character_links?: Record<string, string>;
+  /** Parse scene name / id → series (or episode_only) scene id. */
+  scene_links?: Record<string, string>;
   selection?: LongVideoSelection;
 }
 
