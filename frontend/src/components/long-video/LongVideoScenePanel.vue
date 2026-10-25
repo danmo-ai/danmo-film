@@ -64,6 +64,10 @@
           <div class="lv-scene-workshop__scene-info">
             <span class="lv-scene-workshop__scene-name">{{ sc.name.trim() || $tt('video.longVideoSceneUntitled') }}</span>
             <span class="lv-scene-workshop__scene-meta">
+              <template v-if="projectBoundVersion(sc)">
+                {{ $tt('video.longVideoEpisodeBoundSceneVersion', { v: projectBoundVersion(sc) }) }}
+                ·
+              </template>
               {{ $tt('video.longVideoSceneVariantCount', { n: sc.looks.length }) }}
               ·
               {{ $tt('video.longVideoSceneRefsReady', { n: refCountForScene(sc) }) }}
@@ -113,6 +117,16 @@
                 {{ $tt('video.longVideoIdentityReadOnlyHint') }}
               </p>
               <div class="lv-scene-workshop__detail-meta">
+                <span
+                  v-if="projectBoundVersion(selectedScene)"
+                  class="lv-scene-workshop__detail-chip is-bound-version"
+                >
+                  {{
+                    $tt('video.longVideoEpisodeBoundSceneVersion', {
+                      v: projectBoundVersion(selectedScene),
+                    })
+                  }}
+                </span>
                 <span class="lv-scene-workshop__detail-chip">
                   {{ $tt('video.longVideoSceneVariantCount', { n: selectedScene.looks.length }) }}
                 </span>
@@ -510,6 +524,16 @@ const identityReadOnly = computed(
     && Boolean(selectedScene.value)
     && !isSelectedEpisodeOnly.value,
 );
+
+/** Bound project scene version on episode page (read-only badge). */
+function projectBoundVersion(sc: LongVideoScene | null | undefined): number | null {
+  if (!sc || !seriesLinked.value || showLibraryControls.value) return null;
+  if ((props.episodeOnlySceneIds ?? props.promotableSceneIds ?? []).includes(sc.id)) {
+    return null;
+  }
+  const v = sc.library_version;
+  return typeof v === 'number' && v > 0 ? v : null;
+}
 
 const canPromoteSelectedToSeries = computed(() => {
   const id = selectedScene.value?.id;
@@ -1109,6 +1133,12 @@ function onLookVisionDescription(si: number, li: number, visionDescription: stri
   color: var(--dq-label-secondary);
   background: color-mix(in srgb, var(--dq-fill-control) 55%, transparent);
   border: 0.5px solid var(--dq-border-subtle);
+}
+
+.lv-scene-workshop__detail-chip.is-bound-version {
+  color: color-mix(in srgb, var(--dq-accent) 88%, white);
+  background: color-mix(in srgb, var(--dq-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--dq-accent) 32%, transparent);
 }
 
 .lv-scene-workshop__detail-chip.is-complete {

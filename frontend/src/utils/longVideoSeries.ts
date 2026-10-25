@@ -177,6 +177,7 @@ export function materializeCharacters(
       default_look_id: defaultLookId,
       library_entity_id: ch.library_entity_id,
       library_version: ch.library_version,
+      asset_status: ch.asset_status,
     };
   });
   const seriesIds = new Set(seriesChars.map((c) => c.id));
@@ -268,6 +269,7 @@ export function materializeScenes(
             : sc.grounding_depth_asset_id,
       library_entity_id: sc.library_entity_id,
       library_version: sc.library_version,
+      asset_status: sc.asset_status,
     };
   });
   const seriesIds = new Set(seriesScenes.map((s) => s.id));

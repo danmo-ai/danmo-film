@@ -435,6 +435,7 @@ export function attachParseRosterToEpisode(opts: {
       const cue = wardrobeCueFromIncoming(inc);
       const sel = selectCharacterLookByRules(link.seriesCharacter, cue);
       characterDefaultLooks[link.characterId] = sel.lookId || link.seriesCharacter.default_look_id;
+      const bindVersion = link.seriesCharacter.library_version;
 
       if (sel.createdStub && sel.episodeLookStub) {
         const prev = characterVariants[link.characterId] ?? {
@@ -446,6 +447,7 @@ export function attachParseRosterToEpisode(opts: {
         characterVariants[link.characterId] = {
           ...prev,
           character_id: link.characterId,
+          base_version: bindVersion,
           default_look_id: sel.lookId,
           looks,
         };
@@ -457,6 +459,7 @@ export function attachParseRosterToEpisode(opts: {
         characterVariants[link.characterId] = {
           ...prev,
           character_id: link.characterId,
+          base_version: bindVersion,
           default_look_id: sel.lookId,
         };
       }
@@ -505,6 +508,7 @@ export function attachParseRosterToEpisode(opts: {
       const cue = sceneCueFromIncoming(inc);
       const sel = selectSceneLookByRules(link.seriesScene, cue);
       sceneDefaultLooks[link.sceneId] = sel.lookId || link.seriesScene.default_look_id;
+      const bindVersion = link.seriesScene.library_version;
 
       if (sel.createdStub && sel.episodeLookStub) {
         const prev = sceneVariants[link.sceneId] ?? {
@@ -516,6 +520,7 @@ export function attachParseRosterToEpisode(opts: {
         sceneVariants[link.sceneId] = {
           ...prev,
           scene_id: link.sceneId,
+          base_version: bindVersion,
           default_look_id: sel.lookId,
           looks,
         };
@@ -527,6 +532,7 @@ export function attachParseRosterToEpisode(opts: {
         sceneVariants[link.sceneId] = {
           ...prev,
           scene_id: link.sceneId,
+          base_version: bindVersion,
           default_look_id: sel.lookId,
         };
       }

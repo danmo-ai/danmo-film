@@ -1479,6 +1479,8 @@
     "longVideoPromoteEntityToSeries": "升级到项目共享",
     "longVideoPromoteEntityToSeriesOk": "已写入项目共享资产",
     "longVideoIdentityReadOnlyHint": "项目共享身份只读；本集可选择或定制装扮",
+    "longVideoEpisodeBoundCharacterVersion": "项目角色 v{v}",
+    "longVideoEpisodeBoundSceneVersion": "项目场景 v{v}",
     "longVideoParseReuseCast": "已关联项目角色：{names}",
     "longVideoParseNewEpisodeCast": "本集新增角色：{names}",
     "longVideoPipeSource": "原文（行号）",

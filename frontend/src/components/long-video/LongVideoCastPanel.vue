@@ -67,6 +67,10 @@
           <div class="lv-cast-workshop__char-info">
             <span class="lv-cast-workshop__char-name">{{ ch.name.trim() || $tt('video.longVideoCastNewCharacterName') }}</span>
             <span class="lv-cast-workshop__char-meta">
+              <template v-if="projectBoundVersion(ch)">
+                {{ $tt('video.longVideoEpisodeBoundCharacterVersion', { v: projectBoundVersion(ch) }) }}
+                ·
+              </template>
               {{ $tt('video.longVideoCastLookCount', { n: ch.looks.length }) }}
               ·
               {{ $tt('video.longVideoCastCharReady', { n: portraitCountForCharacter(ch) }) }}
@@ -110,6 +114,16 @@
                 @update:model-value="onCharacterName(selectedIndex, $event)"
               />
               <div class="lv-cast-workshop__detail-meta">
+                <span
+                  v-if="projectBoundVersion(selectedCharacter)"
+                  class="lv-cast-workshop__detail-chip is-bound-version"
+                >
+                  {{
+                    $tt('video.longVideoEpisodeBoundCharacterVersion', {
+                      v: projectBoundVersion(selectedCharacter),
+                    })
+                  }}
+                </span>
                 <span class="lv-cast-workshop__detail-chip">
                   {{ $tt('video.longVideoCastLookCount', { n: selectedCharacter.looks.length }) }}
                 </span>
@@ -666,6 +680,16 @@ const identityReadOnly = computed(
     && Boolean(selectedCharacter.value)
     && !isSelectedEpisodeOnly.value,
 );
+
+/** Bound project character version on episode page (read-only badge). */
+function projectBoundVersion(ch: LongVideoCharacter | null | undefined): number | null {
+  if (!ch || !seriesLinked.value || showLibraryControls.value) return null;
+  if ((props.episodeOnlyCharacterIds ?? props.promotableCharacterIds ?? []).includes(ch.id)) {
+    return null;
+  }
+  const v = ch.library_version;
+  return typeof v === 'number' && v > 0 ? v : null;
+}
 
 const canPromoteSelectedToSeries = computed(() => {
   const id = selectedCharacter.value?.id;
@@ -1348,6 +1372,12 @@ function removeLook(ci: number, li: number) {
   color: var(--dq-label-secondary);
   background: color-mix(in srgb, var(--dq-fill-control) 55%, transparent);
   border: 0.5px solid var(--dq-border-subtle);
+}
+
+.lv-cast-workshop__detail-chip.is-bound-version {
+  color: color-mix(in srgb, var(--dq-accent) 88%, white);
+  background: color-mix(in srgb, var(--dq-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--dq-accent) 32%, transparent);
 }
 
 .lv-cast-workshop__detail-chip.is-complete {

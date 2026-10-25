@@ -1478,6 +1478,8 @@
     "longVideoPromoteEntityToSeries": "Upgrade to project shared",
     "longVideoPromoteEntityToSeriesOk": "Saved to project shared assets",
     "longVideoIdentityReadOnlyHint": "Project identity is read-only; select or customize looks for this episode",
+    "longVideoEpisodeBoundCharacterVersion": "Project cast v{v}",
+    "longVideoEpisodeBoundSceneVersion": "Project scene v{v}",
     "longVideoParseReuseCast": "Linked to project cast: {names}",
     "longVideoParseNewEpisodeCast": "New episode-only cast: {names}",
     "longVideoPipeSource": "Source (line nos.)",
