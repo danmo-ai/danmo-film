@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	genadapt "github.com/danmo-ai/danmo-film/core/adapter/gen"
 	"github.com/danmo-ai/danmo-film/core/service/ingest"
 )
 
@@ -28,7 +30,11 @@ func (a *App) submit(action string) gin.HandlerFunc {
 			fail(c, 400, fmt.Errorf("JSON object required"))
 			return
 		}
-		gen := a.generation()
+		gen, body, err := a.generationForBody(body, action)
+		if err != nil {
+			fail(c, 400, err)
+			return
+		}
 		staged, err := ingest.RewriteBodyAssetRefs(c.Request.Context(), body, gen, a.Assets)
 		if err != nil {
 			fail(c, 502, err)
@@ -54,7 +60,19 @@ func (a *App) submit(action string) gin.HandlerFunc {
 }
 
 func (a *App) listModels(c *gin.Context) {
-	items, err := a.generation().ListModels(c.Request.Context(), c.Query("media"))
+	media := c.Query("media")
+	if pid := strings.TrimSpace(c.Query("provider")); pid != "" {
+		if r, ok := a.generation().(*genadapt.Router); ok {
+			items, err := r.ListModelsFor(c.Request.Context(), pid, media)
+			if err != nil {
+				fail(c, 502, err)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"items": items})
+			return
+		}
+	}
+	items, err := a.generation().ListModels(c.Request.Context(), media)
 	if err != nil {
 		fail(c, 502, err)
 		return
@@ -83,12 +101,21 @@ func (a *App) listAdapters(c *gin.Context) {
 
 func (a *App) getTask(c *gin.Context) {
 	gen := a.generation()
-	task, err := gen.GetTask(c.Request.Context(), c.Param("task_id"))
+	taskID := c.Param("task_id")
+	// Prefer router so provider_id:native_id task refs resolve correctly.
+	task, err := gen.GetTask(c.Request.Context(), taskID)
 	if err != nil {
 		fail(c, 502, err)
 		return
 	}
-	c.JSON(http.StatusOK, ingest.IngestTaskAssetIDs(c.Request.Context(), gen, a.Assets, task, "video"))
+	kind := "video"
+	if media, _ := task["media"].(string); media == "image" {
+		kind = "image"
+	} else if strings.HasPrefix(strings.ToLower(fmt.Sprint(task["id"])), "img_") ||
+		strings.Contains(strings.ToLower(fmt.Sprint(task["id"])), ":img_") {
+		kind = "image"
+	}
+	c.JSON(http.StatusOK, ingest.IngestTaskAssetIDs(c.Request.Context(), gen, a.Assets, task, kind))
 }
 
 func (a *App) streamTask(c *gin.Context) {

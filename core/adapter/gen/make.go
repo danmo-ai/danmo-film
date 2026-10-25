@@ -109,25 +109,83 @@ func (p *MakeProvider) Health(ctx context.Context) (map[string]any, error) {
 }
 
 func (p *MakeProvider) ListModels(ctx context.Context, media string) ([]map[string]any, error) {
-	path := "/api/models"
+	// Danmo Make (DanQing-Studio): GET /api/models?installed=true[&media=]
+	// installed=true → only models with at least one ready (downloaded) version.
+	q := []string{"installed=true"}
 	if media != "" {
-		path += "?media=" + media
+		q = append(q, "media="+media)
 	}
+	path := "/api/models?" + strings.Join(q, "&")
 	m, raw, _, err := p.doJSON(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
+	items, err := parseMakeModelsPayload(m, raw, media)
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func parseMakeModelsPayload(m map[string]any, raw []byte, media string) ([]map[string]any, error) {
 	if items, ok := m["items"].([]any); ok {
 		return asMaps(items), nil
 	}
 	if items, ok := m["models"].([]any); ok {
 		return asMaps(items), nil
 	}
+	// Current Make returns {"models": { "<id>": { media, family, actions, installed, … } }}
+	if models, ok := m["models"].(map[string]any); ok {
+		out := make([]map[string]any, 0, len(models))
+		for id, rawRow := range models {
+			row := map[string]any{"id": id, "label": id}
+			if mm, ok := rawRow.(map[string]any); ok {
+				for k, v := range mm {
+					row[k] = v
+				}
+				if lbl := makeModelLabel(mm, id); lbl != "" {
+					row["label"] = lbl
+				}
+				if media == "" {
+					if med := strVal(mm["media"]); med != "" {
+						row["media"] = med
+					}
+				} else {
+					row["media"] = media
+				}
+			}
+			out = append(out, row)
+		}
+		return out, nil
+	}
 	var arr []any
 	if json.Unmarshal(raw, &arr) == nil {
 		return asMaps(arr), nil
 	}
 	return nil, fmt.Errorf("unexpected /api/models payload from Make")
+}
+
+func makeModelLabel(m map[string]any, fallback string) string {
+	if s := strVal(m["label"]); s != "" {
+		return s
+	}
+	switch n := m["name"].(type) {
+	case string:
+		if strings.TrimSpace(n) != "" {
+			return strings.TrimSpace(n)
+		}
+	case map[string]any:
+		if zh := strVal(n["zh"]); zh != "" {
+			return zh
+		}
+		if en := strVal(n["en"]); en != "" {
+			return en
+		}
+	}
+	if fam := strVal(m["family"]); fam != "" {
+		return fam
+	}
+	return fallback
 }
 
 func (p *MakeProvider) GetRegistry(ctx context.Context) (map[string]any, error) {

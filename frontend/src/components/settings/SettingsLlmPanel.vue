@@ -1,28 +1,7 @@
 <template>
   <div class="settings-panel">
-    <header class="settings-panel__head settings-panel__head--row">
-      <div>
-        <h2>{{ $tt('settings.llmProvider') }}</h2>
-        <p>{{ $tt('settings.llmProfilesDesc') }}</p>
-      </div>
-      <div class="film-llm-add">
-        <DqSelect
-          size="sm"
-          class="film-llm-add__preset"
-          :model-value="addPresetId"
-          @update:model-value="(v: unknown) => (addPresetId = String(v ?? 'openai-chat'))"
-        >
-          <DqOption
-            v-for="p in presets"
-            :key="p.id"
-            :value="p.id"
-            :label="p.label"
-          />
-        </DqSelect>
-        <DqButton size="sm" @click="emit('add-profile', addPresetId)">
-          {{ $tt('settings.llmAddProvider') }}
-        </DqButton>
-      </div>
+    <header class="settings-panel__head">
+      <h2>{{ $tt('settings.llmProvider') }}</h2>
     </header>
 
     <DqPrefPane class="settings-grouped-form settings-pref-pane-form film-llm-default">
@@ -182,18 +161,11 @@
       </div>
     </div>
 
-    <div class="settings-panel__actions">
-      <DqButton type="primary" size="sm" :disabled="saving" @click="emit('save')">
-        {{ $tt('settings.saveProviders') }}
-      </DqButton>
-    </div>
-    <p v-if="saveMsg" class="settings-panel__ok">{{ saveMsg }}</p>
-    <p v-if="saveError" class="settings-panel__error">{{ saveError }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { $tt } from '@/utils/i18n';
 import type { FilmLlmPreset, FilmLlmProfile } from '@/utils/api';
 
@@ -224,9 +196,6 @@ const props = defineProps<{
   presets: FilmLlmPreset[];
   dialects: Array<{ id: string; label: string }>;
   urlPlaceholder: string;
-  saving: boolean;
-  saveMsg: string;
-  saveError: string;
   refreshState?: Record<string, { loading?: boolean; error?: string; items?: RemoteLlmModel[] }>;
 }>();
 
@@ -236,7 +205,6 @@ const dialectOptions = computed(() =>
 
 const emit = defineEmits<{
   (e: 'update:defaultModel', v: string): void;
-  (e: 'add-profile', presetId: string): void;
   (e: 'remove-profile', idx: number): void;
   (e: 'set-protocol', profile: FilmLlmProfile, v: unknown): void;
   (e: 'set-default-dialect', profile: FilmLlmProfile, dialect: string): void;
@@ -244,10 +212,7 @@ const emit = defineEmits<{
   (e: 'apply-preset', profile: FilmLlmProfile, presetId: string): void;
   (e: 'refresh-models', profile: FilmLlmProfile): void;
   (e: 'toggle-remote-model', profile: FilmLlmProfile, model: RemoteLlmModel, selected: boolean): void;
-  (e: 'save'): void;
 }>();
-
-const addPresetId = ref('openai-chat');
 
 function matchedPresetId(profile: FilmLlmProfile): string {
   if (profile.preset_id) return profile.preset_id;
@@ -331,17 +296,6 @@ function onModelDialect(profile: FilmLlmProfile, modelId: string, v: unknown) {
 </script>
 
 <style scoped>
-.film-llm-add {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.film-llm-add__preset {
-  min-width: 200px;
-}
-
 .film-llm-catalog {
   display: flex;
   flex-direction: column;

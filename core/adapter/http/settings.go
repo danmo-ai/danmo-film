@@ -29,7 +29,11 @@ func (a *App) getSettings(c *gin.Context) {
 	a.mu.RLock()
 	s := config.PublicView(a.Settings)
 	profiles := config.LLMProfiles(a.Settings)
+	genProfiles := config.GenerationProfiles(a.Settings)
+	imgProfiles := config.ImageProfiles(a.Settings)
 	defaultModel := config.DefaultLLMModelID(a.Settings)
+	genDefault := config.DefaultGenerationModelID(a.Settings)
+	imgDefault := config.DefaultImageModelID(a.Settings)
 	defCtx := config.DefaultLLMContextWindow(a.Settings)
 	defMax := config.DefaultLLMMaxOutputTokens(a.Settings)
 	defTemp := config.DefaultLLMTemperature(a.Settings)
@@ -46,6 +50,10 @@ func (a *App) getSettings(c *gin.Context) {
 	providers["llm_default_top_p"] = defTopP
 	providers["llm_default_thinking_mode"] = defThink
 	providers["llm_model_params"] = modelParams
+	providers["generation_profiles"] = config.GenProfilesToAny(maskGenProfiles(genProfiles))
+	providers["generation_default_model"] = genDefault
+	providers["image_profiles"] = config.ImageProfilesToAny(maskGenProfiles(imgProfiles))
+	providers["image_default_model"] = imgDefault
 	c.JSON(http.StatusOK, gin.H{
 		"providers": providers,
 		"paths": gin.H{
@@ -143,6 +151,18 @@ func maskProfiles(profiles []config.LLMProfile) []config.LLMProfile {
 	return out
 }
 
+func maskGenProfiles(profiles []config.GenProfile) []config.GenProfile {
+	out := make([]config.GenProfile, len(profiles))
+	copy(out, profiles)
+	for i := range out {
+		if strings.TrimSpace(out[i].APIKey) != "" {
+			out[i].APIKey = config.SecretSentinel
+		}
+		out[i].Models = append([]config.GenModel(nil), out[i].Models...)
+	}
+	return out
+}
+
 func (a *App) putSettings(c *gin.Context) {
 	var incoming config.Settings
 	if err := c.ShouldBindJSON(&incoming); err != nil {
@@ -210,9 +230,15 @@ func (a *App) getWorkspacePaths(c *gin.Context) {
 
 func providerCatalog() []map[string]any {
 	out := []map[string]any{
-		{"id": "volcengine", "kind": "generation", "label": "Volcengine Ark Seedance", "needs_api_key": true},
-		{"id": "dashscope", "kind": "generation", "label": "DashScope 万相", "needs_api_key": true},
-		{"id": "minimax", "kind": "generation", "label": "MiniMax Hailuo", "needs_api_key": true},
+		{"id": "danmo-make", "kind": "generation", "label": "Danmo Make", "needs_api_key": false},
+		{"id": "volcengine", "kind": "generation", "label": "火山引擎", "needs_api_key": true},
+		{"id": "dashscope", "kind": "generation", "label": "阿里云", "needs_api_key": true},
+		{"id": "minimax", "kind": "generation", "label": "MiniMax", "needs_api_key": true},
+		{"id": "danmo-make", "kind": "image", "label": "Danmo Make", "needs_api_key": false},
+		{"id": "volcengine", "kind": "image", "label": "火山引擎", "needs_api_key": true},
+		{"id": "dashscope", "kind": "image", "label": "阿里云", "needs_api_key": true},
+		{"id": "minimax", "kind": "image", "label": "MiniMax", "needs_api_key": true},
+		{"id": "openai", "kind": "image", "label": "OpenAI", "needs_api_key": true},
 	}
 	for _, p := range config.LLMProviderPresets() {
 		out = append(out, map[string]any{

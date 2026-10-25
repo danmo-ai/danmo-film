@@ -112,7 +112,30 @@ const CURATED_RESOLUTION_PAIRS: Array<[number, number]> = [
   [1536, 1920],
   [1920, 1024],
   [1024, 1920],
+  // Mainstream 16:9 / 9:16 (cloud video vendors)
+  [854, 480],
+  [480, 854],
+  [1280, 720],
+  [720, 1280],
+  [1920, 1080],
+  [1080, 1920],
 ];
+
+/**
+ * Fallback sizes when the model has no registry resolution_presets
+ * (cloud Video Providers: 火山引擎 / 阿里云 / MiniMax).
+ * Landscape 16:9 + portrait 9:16 at common 480p / 720p / 1080p tiers.
+ */
+export const MAINSTREAM_16_9_RESOLUTIONS: Array<[number, number]> = [
+  [854, 480],
+  [1280, 720],
+  [1920, 1080],
+  [480, 854],
+  [720, 1280],
+  [1080, 1920],
+];
+
+export const DEFAULT_OUTPUT_SIZE = '1280x720';
 
 function gcd(a: number, b: number): number {
   let x = Math.abs(a);
@@ -165,8 +188,8 @@ function toResolutionSizeOption(value: string, isDefault = false): ResolutionSiz
 
 /** Single-line label for Composer ``DqOption`` (avoids duplicate value + slot text). */
 export function formatResolutionOptionLabel(opt: ResolutionSizeOption): string {
-  const px = opt.pixelLabel || opt.value.replace('x', '×');
-  if (opt.label === '1:1') return px;
+  const px = opt.pixelLabel || opt.value.replace(/x/i, '×');
+  if (!opt.label || opt.label === '1:1' || opt.label === px) return px;
   return `${px} (${opt.label})`;
 }
 
@@ -175,6 +198,24 @@ function orderResolutionOptions(options: ResolutionSizeOption[], preferred?: str
   const idx = options.findIndex((o) => o.value === preferred);
   if (idx <= 0) return options;
   return [options[idx]!, ...options.slice(0, idx), ...options.slice(idx + 1)];
+}
+
+function mainstream16x9Options(preferred?: string | null): ResolutionSizeOption[] {
+  const defaultValue = preferred && parseSizeValue(preferred) ? preferred : DEFAULT_OUTPUT_SIZE;
+  const options = MAINSTREAM_16_9_RESOLUTIONS.map(([w, h]) => {
+    const value = formatSizeValue(w, h);
+    return {
+      label: aspectRatioLabel(w, h),
+      value,
+      pixelLabel: `${w}×${h}`,
+      isDefault: value === defaultValue,
+    };
+  });
+  // Keep a saved non-standard size selectable (e.g. legacy 1280x704).
+  if (preferred && parseSizeValue(preferred) && !options.some((o) => o.value === preferred)) {
+    options.unshift(toResolutionSizeOption(preferred));
+  }
+  return orderResolutionOptions(options, defaultValue);
 }
 
 /** Build Composer resolution dropdown from registry ``parameters`` (presets or width/height enums). */
@@ -194,7 +235,10 @@ export function buildResolutionSizeOptions(
 
   const normalized = normalizeParamsDef(raw);
   const pair = resolutionPair(normalized);
-  if (!pair) return [];
+  if (!pair) {
+    // Cloud Video Providers / models without registry size schema.
+    return mainstream16x9Options(null);
+  }
 
   const wOpts = (pair.width.options as number[] | undefined) ?? [Number(pair.width.default) || 1024];
   const hOpts = (pair.height.options as number[] | undefined) ?? [Number(pair.height.default) || 1024];
@@ -242,9 +286,21 @@ export function pickResolutionForModel(
   parameters: Record<string, unknown> | undefined | null,
   savedSize: string | null | undefined,
 ): string | null {
-  const options = buildResolutionSizeOptions(parameters);
+  let options = buildResolutionSizeOptions(parameters);
   if (!options.length) return null;
-  if (savedSize && options.some((o) => o.value === savedSize)) return savedSize;
+  const saved = String(savedSize || '').trim();
+  if (saved && options.some((o) => o.value === saved)) return saved;
+  // Preserve legacy / custom sizes (e.g. 1280x704) in the picker when falling back
+  // to the mainstream 16:9 set.
+  if (saved && parseSizeValue(saved) && !options.some((o) => o.value === saved)) {
+    const hasRegistryPresets =
+      Boolean(resolutionPresetStrings(parameters || {}))
+      || Boolean(resolutionPair(normalizeParamsDef(parameters || {})));
+    if (!hasRegistryPresets) {
+      options = mainstream16x9Options(saved);
+      return saved;
+    }
+  }
 
   const presetDefault = resolutionPresetDefault(parameters || {});
   if (presetDefault && options.some((o) => o.value === presetDefault)) return presetDefault;

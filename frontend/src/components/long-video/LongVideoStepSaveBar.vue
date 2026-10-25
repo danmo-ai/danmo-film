@@ -7,6 +7,7 @@
   >
     <span class="lv-step-save__hint">{{ hint }}</span>
     <div class="lv-step-save__actions">
+      <slot name="actions-before" />
       <span class="lv-step-save__status" :data-status="status">{{ statusLabel }}</span>
       <DqButton
         :type="nextLabel ? 'default' : 'primary'"

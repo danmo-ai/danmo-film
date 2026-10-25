@@ -54,21 +54,22 @@ func (p *MiniMaxProvider) Health(_ context.Context) (map[string]any, error) {
 	return map[string]any{"ok": true, "configured": true, "vendor": "minimax-hailuo"}, nil
 }
 
-func (p *MiniMaxProvider) ListModels(_ context.Context, media string) ([]map[string]any, error) {
-	models := []map[string]any{
-		{"id": p.model, "media": "video", "label": "Hailuo", "modes": []string{"t2v", "i2v", "flf"}, "max_duration_sec": 10},
-		{"id": "image-01", "media": "image", "label": "MiniMax Image", "modes": []string{"t2i"}},
+func (p *MiniMaxProvider) ListModels(ctx context.Context, media string) ([]map[string]any, error) {
+	if p.apiKey == "" {
+		return nil, fmt.Errorf("minimax API key not configured")
 	}
-	if media == "" {
-		return models, nil
+	m, err := p.getJSON(ctx, "/v1/models")
+	if err != nil {
+		return nil, fmt.Errorf("minimax list models: %w", err)
 	}
-	var out []map[string]any
-	for _, m := range models {
-		if strVal(m["media"]) == media {
-			out = append(out, m)
-		}
+	items, err := parseMiniMaxModels(m, media)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	if len(items) == 0 {
+		return nil, fmt.Errorf("minimax /v1/models returned no models")
+	}
+	return ensureConfiguredModel(items, p.model, media, p.model), nil
 }
 
 func (p *MiniMaxProvider) GetRegistry(ctx context.Context) (map[string]any, error) {

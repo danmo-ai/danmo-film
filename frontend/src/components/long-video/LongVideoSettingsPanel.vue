@@ -188,19 +188,6 @@
           />
         </div>
         <div class="lv-ep-settings__field">
-          <label class="lv-ep-settings__label" :for="ids.duration">{{ $tt('video.longVideoTargetDuration') }}</label>
-          <div class="lv-ep-settings__duration">
-            <DqInput
-              :id="ids.duration"
-              type="number"
-              class="lv-ep-settings__control"
-              :model-value="String(targetDurationSec ?? 60)"
-              @update:model-value="$emit('update:targetDurationSec', Number($event) || 60)"
-            />
-            <span class="lv-ep-settings__unit">{{ $tt('video.longVideoSecondsUnit') }}</span>
-          </div>
-        </div>
-        <div class="lv-ep-settings__field">
           <label class="lv-ep-settings__label" :for="ids.keyframe">{{ $tt('video.longVideoKeyframeModel') }}</label>
           <DqSelect
             :id="ids.keyframe"
@@ -249,20 +236,6 @@
             <DqOption v-for="n in overlapFrameOptions" :key="n" :label="overlapFrameLabel(n)" :value="n" />
           </DqSelect>
         </div>
-        <div class="lv-ep-settings__field">
-          <label class="lv-ep-settings__label" :for="ids.chain">{{ $tt('video.longVideoChainMode') }}</label>
-          <DqSelect
-            :id="ids.chain"
-            :model-value="chainMode"
-            class="lv-ep-settings__control"
-            @update:model-value="$emit('update:chainMode', $event)"
-          >
-            <DqOption value="keyframe_only" :label="$tt('video.longVideoChainKeyframe')" />
-            <DqOption value="last_frame" :label="$tt('video.longVideoChainLastFrame')" />
-            <DqOption value="first_last" :label="$tt('video.longVideoChainFirstLast')" />
-            <DqOption value="reference_r2v" :label="$tt('video.longVideoChainReferenceR2v')" />
-          </DqSelect>
-        </div>
         <div class="lv-ep-settings__field lv-ep-settings__field--top">
           <label class="lv-ep-settings__label" :for="ids.style">{{ $tt('video.longVideoProjectStyleLabel') }}</label>
           <textarea
@@ -301,7 +274,6 @@ const props = withDefaults(
     lockedOutputSize?: string;
     lockedOverlapFrames?: number;
     canOpenProjectSettings?: boolean;
-    chainMode?: string;
     styleAnchor?: string;
   }>(),
   {
@@ -310,7 +282,6 @@ const props = withDefaults(
     targetDurationSec: 60,
     lockedOverlapFrames: 4,
     canOpenProjectSettings: false,
-    chainMode: 'keyframe_only',
     styleAnchor: '',
   },
 );
@@ -322,7 +293,6 @@ defineEmits<{
   (e: 'update:outputSize', value: string): void;
   (e: 'update:overlapFrames', value: number): void;
   (e: 'update:targetDurationSec', value: number): void;
-  (e: 'update:chainMode', value: string): void;
   (e: 'update:styleAnchor', value: string): void;
   (e: 'open-project-settings'): void;
 }>();
@@ -338,7 +308,6 @@ const ids = {
   size: 'lv-settings-size',
   overlap: 'lv-settings-overlap',
   duration: 'lv-settings-duration',
-  chain: 'lv-settings-chain',
   style: 'lv-settings-style',
 } as const;
 
@@ -379,7 +348,18 @@ const sizeSelectOptions = computed(() => {
   const opts = [...props.outputSizeOptions];
   const cur = props.outputSize?.trim();
   if (cur && !opts.some((o) => o.value === cur)) {
-    opts.unshift({ label: cur.replace(/x/i, '×'), value: cur });
+    const [w, h] = cur.toLowerCase().split('x').map(Number);
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+      const g = (a: number, b: number): number => (b ? g(b, a % b) : a);
+      const d = g(w, h) || 1;
+      opts.unshift({
+        label: w === h ? '1:1' : `${w / d}:${h / d}`,
+        value: cur,
+        pixelLabel: `${w}×${h}`,
+      });
+    } else {
+      opts.unshift({ label: cur.replace(/x/i, '×'), value: cur, pixelLabel: cur.replace(/x/i, '×') });
+    }
   }
   return opts;
 });

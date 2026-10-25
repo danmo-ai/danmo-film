@@ -132,7 +132,7 @@ func RunExpand(ctx context.Context, llm port.LLMProvider, model string, artifact
 		segDur = 5
 	}
 	if maxClip <= 0 {
-		maxClip = 10
+		maxClip = 15
 	}
 	loc := NormalizeLocale(locale)
 	plan, n, err := runBeatPlan(ctx, llm, model, artifact, target, segDur, maxClip, loc, beatIndices, onProgress)
@@ -231,7 +231,7 @@ func softDurationBand(target float64) (lo, hi float64) {
 func expandPlan(art map[string]any, llmRows []map[string]any, maxClip float64) []map[string]any {
 	cap := maxClip
 	if cap < 2 {
-		cap = 10
+		cap = 15
 	}
 	var segs []map[string]any
 	segIdx := 0

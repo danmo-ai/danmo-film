@@ -965,7 +965,7 @@ export interface LongVideoProjectState {
   overlap_frames: number;
   /** Default chain mode for new / unset segment edges. */
   chain_mode: LongVideoChainMode;
-  /** Keyframe + segment output size (must match segment model presets, e.g. 1280x704). */
+  /** Keyframe + segment output size (WxH; cloud fallback is mainstream 16:9 / 9:16). */
   output_size?: string;
   shots: LongVideoShotState[];
   final_asset_id?: string;

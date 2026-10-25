@@ -108,6 +108,22 @@ func filepathBase(p string) string {
 	return filepath.Base(p)
 }
 
+func writeDataURIFile(dataURI, dest string) error {
+	const prefix = "base64,"
+	i := strings.Index(dataURI, prefix)
+	if i < 0 {
+		return fmt.Errorf("unsupported data uri")
+	}
+	raw, err := base64.StdEncoding.DecodeString(dataURI[i+len(prefix):])
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dest, raw, 0o644)
+}
+
 func fileDataURI(path, mime string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

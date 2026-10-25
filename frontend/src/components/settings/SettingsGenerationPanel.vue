@@ -1,130 +1,235 @@
 <template>
   <div class="settings-panel">
     <header class="settings-panel__head">
-      <h2>{{ $tt('settings.genProvider') }}</h2>
-      <p>{{ $tt('settings.genProviderDesc') }}</p>
+      <h2>{{ title }}</h2>
     </header>
 
-    <DqPrefPane class="settings-grouped-form settings-pref-pane-form">
-      <DqPrefRow :label="$tt('settings.activeProvider')">
+    <DqPrefPane class="settings-grouped-form settings-pref-pane-form film-llm-default">
+      <DqPrefRow :label="defaultModelLabel">
         <DqSelect
           size="sm"
-          :model-value="generation.provider"
-          @update:model-value="(v: unknown) => emit('set-provider', v)"
+          :model-value="defaultModel"
+          @update:model-value="(v: unknown) => emit('update:defaultModel', String(v ?? ''))"
         >
           <DqOption
-            v-for="opt in genProviders"
+            v-for="opt in modelOptions"
             :key="opt.value"
-            :label="opt.label"
             :value="opt.value"
+            :label="opt.label"
           />
         </DqSelect>
       </DqPrefRow>
-
-      <template v-if="generation.provider === 'volcengine' || generation.provider === 'ark'">
-        <DqPrefRow :label="$tt('settings.baseUrl')">
-          <DqInput v-model="volcengine.base_url" size="sm" placeholder="https://ark.cn-beijing.volces.com" />
-        </DqPrefRow>
-        <DqPrefRow :label="$tt('settings.apiKey')">
-          <DqInput v-model="volcengine.api_key" size="sm" type="password" :placeholder="$tt('settings.apiKeyPh')" />
-        </DqPrefRow>
-        <DqPrefRow :label="$tt('settings.cloudModel')">
-          <DqInput v-model="volcengine.model" size="sm" placeholder="doubao-seedance-1-0-pro-250528" />
-        </DqPrefRow>
-      </template>
-
-      <template v-else-if="generation.provider === 'dashscope'">
-        <DqPrefRow :label="$tt('settings.baseUrl')">
-          <DqInput v-model="dashscope.base_url" size="sm" placeholder="https://dashscope.aliyuncs.com" />
-        </DqPrefRow>
-        <DqPrefRow :label="$tt('settings.apiKey')">
-          <DqInput v-model="dashscope.api_key" size="sm" type="password" :placeholder="$tt('settings.apiKeyPh')" />
-        </DqPrefRow>
-        <DqPrefRow :label="$tt('settings.cloudModel')">
-          <DqInput v-model="dashscope.model" size="sm" placeholder="wan2.2-t2v-plus" />
-        </DqPrefRow>
-      </template>
-
-      <template v-else-if="generation.provider === 'minimax'">
-        <DqPrefRow :label="$tt('settings.baseUrl')">
-          <DqInput v-model="minimax.base_url" size="sm" placeholder="https://api.minimax.chat" />
-        </DqPrefRow>
-        <DqPrefRow :label="$tt('settings.apiKey')">
-          <DqInput v-model="minimax.api_key" size="sm" type="password" :placeholder="$tt('settings.apiKeyPh')" />
-        </DqPrefRow>
-        <DqPrefRow :label="$tt('settings.cloudModel')">
-          <DqInput v-model="minimax.model" size="sm" placeholder="MiniMax-Hailuo-02" />
-        </DqPrefRow>
-      </template>
     </DqPrefPane>
 
-    <div class="settings-panel__actions">
-      <DqButton type="primary" size="sm" :disabled="saving" @click="emit('save')">
-        {{ $tt('settings.saveProviders') }}
-      </DqButton>
-      <DqButton size="sm" :disabled="checking" @click="emit('test')">
-        {{ $tt('settings.testProviders') }}
-      </DqButton>
-    </div>
-    <p v-if="saveMsg" class="settings-panel__ok">{{ saveMsg }}</p>
-    <p v-if="saveError" class="settings-panel__error">{{ saveError }}</p>
+    <p v-if="!profiles.length" class="settings-panel__hint">
+      {{ emptyHint }}
+    </p>
 
-    <div v-if="providerStatus" class="film-page__status-list">
-      <div class="film-page__status-item">
-        <span class="film-page__status-name">{{ $tt('settings.statusLlm') }}</span>
-        <span class="film-page__status-id">{{ providerStatus.llm?.provider_id || '—' }}</span>
-        <span
-          class="film-page__status-badge"
-          :class="providerStatus.llm?.available ? 'is-ok' : 'is-bad'"
+    <div
+      v-for="(profile, pIdx) in profiles"
+      :key="profile.id"
+      class="film-llm-card"
+    >
+      <div class="film-llm-card__head">
+        <DqInput
+          :model-value="profile.label"
+          size="sm"
+          class="film-llm-card__title"
+          :placeholder="$tt('settings.llmProviderNamePh')"
+          @update:model-value="(v: string) => (profile.label = v)"
+        />
+        <div class="film-llm-card__toggle">
+          <span>{{ $tt('settings.llmEnabled') }}</span>
+          <DqSwitch v-model="profile.enabled" size="sm" />
+        </div>
+        <DqButton
+          size="sm"
+          type="danger"
+          @click="emit('remove-profile', pIdx)"
         >
-          {{ providerStatus.llm?.available ? $tt('settings.statusAvailable') : $tt('settings.statusUnavailable') }}
-        </span>
+          {{ $tt('settings.llmRemoveProvider') }}
+        </DqButton>
       </div>
-      <div class="film-page__status-item">
-        <span class="film-page__status-name">{{ $tt('settings.statusGeneration') }}</span>
-        <span class="film-page__status-id">{{ providerStatus.generation?.provider_id || '—' }}</span>
-        <span
-          class="film-page__status-badge"
-          :class="genHealthOk ? 'is-ok' : 'is-bad'"
-        >
-          {{ genHealthOk ? $tt('settings.statusOk') : $tt('settings.statusFail') }}
-        </span>
+
+      <DqPrefPane class="settings-grouped-form settings-pref-pane-form">
+        <DqPrefRow :label="$tt('settings.genPreset')">
+          <code class="film-page__path">{{ vendorLabel(profile.vendor) }}</code>
+        </DqPrefRow>
+        <DqPrefRow :label="$tt('settings.baseUrl')">
+          <DqInput
+            v-model="profile.base_url"
+            size="sm"
+            :placeholder="urlPlaceholder(profile.vendor)"
+          />
+        </DqPrefRow>
+        <DqPrefRow :label="$tt('settings.apiKey')">
+          <DqInput
+            v-model="profile.api_key"
+            size="sm"
+            type="password"
+            :placeholder="$tt('settings.apiKeyPh')"
+          />
+        </DqPrefRow>
+      </DqPrefPane>
+
+      <div class="film-llm-models">
+        <div class="film-llm-models__head">
+          <span>{{ $tt('settings.llmModels') }}</span>
+          <DqButton
+            size="sm"
+            type="text"
+            :disabled="isRefreshing(profile.id) || saving"
+            @click="emit('refresh-models', profile)"
+          >
+            {{ isRefreshing(profile.id) ? $tt('settings.llmRefreshingModels') : $tt('settings.llmRefreshModels') }}
+          </DqButton>
+        </div>
+
+        <p v-if="refreshError(profile.id)" class="settings-panel__error">{{ refreshError(profile.id) }}</p>
+        <p class="settings-panel__hint">{{ $tt('settings.genSelectModelsHint') }}</p>
+
+        <div v-if="modelChoices(profile).length" class="film-llm-catalog">
+          <div
+            v-for="item in modelChoices(profile)"
+            :key="item.id"
+            class="film-llm-catalog__row"
+          >
+            <div class="film-llm-catalog__meta">
+              <span class="film-llm-catalog__label">{{ item.label || item.id }}</span>
+              <code class="film-llm-catalog__id">{{ item.id }}</code>
+            </div>
+            <div class="film-llm-catalog__controls">
+              <DqSwitch
+                size="sm"
+                :model-value="isModelSelected(profile, item.id)"
+                @update:model-value="(v: boolean) => emit('toggle-model', profile, item, Boolean(v))"
+              />
+            </div>
+          </div>
+        </div>
+        <p v-else class="settings-panel__hint">{{ $tt('settings.llmModelsEmpty') }}</p>
       </div>
-      <p v-if="genHealthError" class="film-page__status-detail">{{ genHealthError }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
 import { $tt } from '@/utils/i18n';
-import type { FilmProviderBlock } from '@/utils/api';
+import type { FilmGenProfile } from '@/utils/api';
+
+type GenModelRow = { id: string; label?: string; enabled?: boolean };
 
 const props = defineProps<{
-  generation: FilmProviderBlock;
-  volcengine: FilmProviderBlock;
-  dashscope: FilmProviderBlock;
-  minimax: FilmProviderBlock;
-  genProviders: Array<{ value: string; label: string }>;
+  title: string;
+  defaultModelLabel: string;
+  emptyHint: string;
+  profiles: FilmGenProfile[];
+  presets: Array<{ value: string; label: string }>;
+  defaultModel: string;
+  modelOptions: Array<{ value: string; label: string }>;
   saving: boolean;
-  checking: boolean;
-  saveMsg: string;
-  saveError: string;
-  providerStatus: {
-    llm?: { provider_id?: string; available?: boolean };
-    generation?: { provider_id?: string; health?: { ok?: boolean; error?: string } };
-  } | null;
+  refreshState: Record<string, { loading?: boolean; error?: string; items?: GenModelRow[] }>;
 }>();
 
 const emit = defineEmits<{
-  (e: 'set-provider', v: unknown): void;
-  (e: 'save'): void;
-  (e: 'test'): void;
+  (e: 'update:defaultModel', v: string): void;
+  (e: 'refresh-models', profile: FilmGenProfile): void;
+  (e: 'remove-profile', idx: number): void;
+  (e: 'toggle-model', profile: FilmGenProfile, model: GenModelRow, on: boolean): void;
 }>();
 
-const genHealthOk = computed(() => Boolean(props.providerStatus?.generation?.health?.ok));
-const genHealthError = computed(() => {
-  if (genHealthOk.value) return '';
-  return String(props.providerStatus?.generation?.health?.error || '').trim();
-});
+const VENDOR_URL: Record<string, string> = {
+  'danmo-make': 'http://127.0.0.1:7800',
+  volcengine: 'https://ark.cn-beijing.volces.com',
+  dashscope: 'https://dashscope.aliyuncs.com',
+  minimax: 'https://api.minimax.chat',
+  openai: 'https://api.openai.com/v1',
+};
+
+function vendorLabel(vendor: string) {
+  return props.presets.find((p) => p.value === vendor)?.label || vendor;
+}
+
+function urlPlaceholder(vendor: string) {
+  return VENDOR_URL[vendor] || VENDOR_URL.volcengine;
+}
+
+function isRefreshing(id: string) {
+  return Boolean(props.refreshState[id]?.loading);
+}
+
+function refreshError(id: string) {
+  return props.refreshState[id]?.error || '';
+}
+
+function modelChoices(profile: FilmGenProfile): GenModelRow[] {
+  const byId = new Map<string, GenModelRow>();
+  const add = (id: string, label?: string) => {
+    const key = id.trim();
+    if (!key || byId.has(key)) return;
+    byId.set(key, { id: key, label: (label || key).trim() || key });
+  };
+  for (const m of props.refreshState[profile.id]?.items || []) add(m.id, m.label);
+  for (const m of profile.models || []) {
+    if (m.enabled) add(m.id, m.label);
+  }
+  return [...byId.values()];
+}
+
+function isModelSelected(profile: FilmGenProfile, id: string) {
+  return (profile.models || []).some((m) => m.id === id && m.enabled !== false);
+}
 </script>
+
+<style scoped>
+.film-llm-catalog {
+  display: flex;
+  flex-direction: column;
+  margin-top: 2px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.film-llm-catalog__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  font-size: 13px;
+  color: var(--dq-label-primary);
+}
+
+.film-llm-catalog__row + .film-llm-catalog__row {
+  border-top: 0.5px solid color-mix(in srgb, var(--dq-border-subtle) 50%, transparent);
+}
+
+.film-llm-catalog__meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.film-llm-catalog__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.film-llm-catalog__id {
+  font-size: 11px;
+  color: var(--dq-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.film-llm-catalog__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+</style>

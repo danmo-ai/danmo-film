@@ -44,8 +44,16 @@ func (a *App) proxy(action string) gin.HandlerFunc {
 		if req.Body == nil {
 			req.Body = map[string]any{}
 		}
-		gen := a.generation()
-		staged, err := ingest.RewriteBodyAssetRefs(c.Request.Context(), req.Body, gen, a.Assets)
+		kind := action
+		if action == "video_edit" {
+			kind = "video"
+		}
+		gen, body, err := a.generationForBody(req.Body, kind)
+		if err != nil {
+			fail(c, 400, err)
+			return
+		}
+		staged, err := ingest.RewriteBodyAssetRefs(c.Request.Context(), body, gen, a.Assets)
 		if err != nil {
 			fail(c, 502, err)
 			return

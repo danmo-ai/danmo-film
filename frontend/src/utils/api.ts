@@ -32,12 +32,32 @@ import type {
 import { DQ_STORAGE, getItem } from '@/utils/storage';
 import { ScriptParseError, type ScriptParseQualityIssue } from '@/utils/scriptParseError';
 
+export type FilmGenModel = {
+  id: string;
+  label?: string;
+  enabled?: boolean;
+};
+
+/** One Video Provider instance (LLM-style); vendor is the adapter preset. */
+export type FilmGenProfile = {
+  id: string;
+  label?: string;
+  /** Adapter kind: danmo-make | volcengine | dashscope | minimax */
+  vendor: string;
+  base_url: string;
+  api_key?: string;
+  enabled?: boolean;
+  models: FilmGenModel[];
+};
+
 export type FilmProviderBlock = {
   protocol?: string;
   provider?: string;
   base_url?: string;
   api_key?: string;
   model?: string;
+  enabled?: boolean;
+  models?: FilmGenModel[];
 };
 
 export type FilmLlmModel = {
@@ -119,6 +139,16 @@ export type FilmSettingsPayload = {
     llm_default_thinking_mode?: string;
     llm_model_params?: Record<string, FilmLlmModelParams>;
     generation: FilmProviderBlock;
+    /** Video provider instances (multi-profile, same vendor allowed). */
+    generation_profiles?: FilmGenProfile[];
+    /** Create-page default: profile_id/model_id */
+    generation_default_model?: string;
+    /** Image provider instances (multi-profile, same shape as generation_profiles). */
+    image_profiles?: FilmGenProfile[];
+    /** Keyframe / image create default: profile_id/model_id */
+    image_default_model?: string;
+    /** @deprecated legacy fixed vendor blocks — migrated into generation_profiles on load */
+    'danmo-make'?: FilmProviderBlock;
     volcengine?: FilmProviderBlock;
     dashscope?: FilmProviderBlock;
     minimax?: FilmProviderBlock;
@@ -361,6 +391,17 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
+client.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    const detail = error?.response?.data?.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      error.message = detail.trim();
+    }
+    return Promise.reject(error);
+  },
+);
+
 /** Append ``api_key`` for EventSource (cannot set Authorization headers). */
 export function withAccessApiKey(url: string): string {
   const apiKey = (getItem(DQ_STORAGE.HTTP_API_KEY) || '').trim();
@@ -369,22 +410,26 @@ export function withAccessApiKey(url: string): string {
   return `${url}${sep}api_key=${encodeURIComponent(apiKey)}`;
 }
 
-/** Task id from media submit 202 body `{ task: { id, ... } }` (legacy flat `{ id }` tolerated). */
+/** Task id from media submit body. Prefer profile-prefixed ids (`profile:native`). */
 export function taskIdFromSubmitResponse(res: unknown): string {
   if (res == null || typeof res !== 'object') return '';
   const top = res as Record<string, unknown>;
+  const candidates: string[] = [];
+  const direct = top.id;
+  if (direct != null && String(direct).trim() !== '' && String(direct) !== '<nil>') {
+    candidates.push(String(direct).trim());
+  }
   const task = top.task;
   if (task != null && typeof task === 'object') {
     const nested = (task as Record<string, unknown>).id;
-    if (nested != null && String(nested).trim() !== '') {
-      return String(nested);
+    if (nested != null && String(nested).trim() !== '' && String(nested) !== '<nil>') {
+      candidates.push(String(nested).trim());
     }
   }
-  const direct = top.id;
-  if (direct != null && String(direct).trim() !== '') {
-    return String(direct);
-  }
-  return '';
+  // Prefer routable profile_id:native_id when both forms are present.
+  const prefixed = candidates.find((id) => id.includes(':'));
+  if (prefixed) return prefixed;
+  return candidates[0] || '';
 }
 
 

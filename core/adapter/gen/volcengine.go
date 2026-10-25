@@ -57,21 +57,22 @@ func (p *VolcengineProvider) Health(ctx context.Context) (map[string]any, error)
 	return map[string]any{"ok": true, "configured": true, "vendor": "volcengine-seedance"}, nil
 }
 
-func (p *VolcengineProvider) ListModels(_ context.Context, media string) ([]map[string]any, error) {
-	models := []map[string]any{
-		{"id": p.model, "media": "video", "label": "Seedance", "modes": []string{"t2v", "i2v", "flf"}, "max_duration_sec": 12},
-		{"id": "doubao-seedream", "media": "image", "label": "Seedream", "modes": []string{"t2i"}},
+func (p *VolcengineProvider) ListModels(ctx context.Context, media string) ([]map[string]any, error) {
+	if p.apiKey == "" {
+		return nil, fmt.Errorf("volcengine API key not configured")
 	}
-	if media == "" {
-		return models, nil
+	m, err := p.getJSON(ctx, "/api/v3/models")
+	if err != nil {
+		return nil, fmt.Errorf("volcengine list models: %w", err)
 	}
-	var out []map[string]any
-	for _, m := range models {
-		if strVal(m["media"]) == media {
-			out = append(out, m)
-		}
+	items, err := parseOpenAIStyleModels(m, media)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	if len(items) == 0 {
+		return nil, fmt.Errorf("volcengine /api/v3/models returned no models")
+	}
+	return ensureConfiguredModel(items, p.model, media, p.model), nil
 }
 
 func (p *VolcengineProvider) GetRegistry(ctx context.Context) (map[string]any, error) {

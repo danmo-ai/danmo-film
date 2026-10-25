@@ -16,7 +16,7 @@ import (
 
 // DashScope 通义万相 video-synthesis (wan2.x) — one official async API.
 type DashScopeProvider struct {
-	base   string
+	base   string // native AIGC root (no /compatible-mode, no /api/v1)
 	apiKey string
 	model  string
 	client *http.Client
@@ -26,20 +26,42 @@ type DashScopeProvider struct {
 }
 
 func NewDashScope(base, apiKey, model string) *DashScopeProvider {
-	if base == "" {
-		base = "https://dashscope.aliyuncs.com"
-	}
 	if model == "" {
 		model = "wan2.2-t2v-plus"
 	}
 	return &DashScopeProvider{
-		base:   strings.TrimRight(base, "/"),
+		base:   normalizeDashScopeBase(base),
 		apiKey: apiKey,
 		model:  model,
 		client: &http.Client{Timeout: 120 * time.Second},
 		staged: map[string]stagedFile{},
 		urls:   map[string]string{},
 	}
+}
+
+// normalizeDashScopeBase maps LLM-style OpenAI-compatible URLs onto the
+// native DashScope host used by /api/v1/services/aigc/* and /api/v1/tasks/*.
+func normalizeDashScopeBase(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return "https://dashscope.aliyuncs.com"
+	}
+	low := strings.ToLower(base)
+	for _, suf := range []string{
+		"/compatible-mode/v1",
+		"/compatible-mode",
+		"/api/v1",
+	} {
+		if strings.HasSuffix(low, suf) {
+			base = base[:len(base)-len(suf)]
+			base = strings.TrimRight(base, "/")
+			low = strings.ToLower(base)
+		}
+	}
+	if base == "" {
+		return "https://dashscope.aliyuncs.com"
+	}
+	return base
 }
 
 func (p *DashScopeProvider) ID() string { return "dashscope" }
@@ -51,21 +73,78 @@ func (p *DashScopeProvider) Health(_ context.Context) (map[string]any, error) {
 	return map[string]any{"ok": true, "configured": true, "vendor": "dashscope-wan"}, nil
 }
 
-func (p *DashScopeProvider) ListModels(_ context.Context, media string) ([]map[string]any, error) {
-	models := []map[string]any{
-		{"id": p.model, "media": "video", "label": "万相视频", "modes": []string{"t2v", "i2v"}, "max_duration_sec": 10},
-		{"id": "wanx-v1", "media": "image", "label": "万相文生图", "modes": []string{"t2i"}},
+func (p *DashScopeProvider) ListModels(ctx context.Context, media string) ([]map[string]any, error) {
+	if p.apiKey == "" {
+		return nil, fmt.Errorf("dashscope API key not configured")
 	}
-	if media == "" {
-		return models, nil
+	var errs []string
+	// 1) OpenAI-compat list — Token Plan returns the full subscription set here
+	// (qwen-image-*, wan2.7-image*, wan3.0-video, chat models, …). No local catalog.
+	if items, err := p.listCompatModels(ctx, media); err == nil && len(items) > 0 {
+		return ensureConfiguredModel(items, p.model, media, p.model), nil
+	} else if err != nil {
+		errs = append(errs, err.Error())
 	}
+	// 2) Native Model Studio list (workspace / intl open-platform hosts).
+	if items, err := p.listNativeModels(ctx, media); err == nil && len(items) > 0 {
+		return ensureConfiguredModel(items, p.model, media, p.model), nil
+	} else if err != nil {
+		errs = append(errs, err.Error())
+	}
+	if len(errs) == 0 {
+		errs = append(errs, "empty model list")
+	}
+	return nil, fmt.Errorf("dashscope list models failed: %s", strings.Join(errs, "; "))
+}
+
+func (p *DashScopeProvider) listCompatModels(ctx context.Context, media string) ([]map[string]any, error) {
+	m, err := p.getURL(ctx, p.base+"/compatible-mode/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	return parseOpenAIStyleModels(m, media)
+}
+
+func (p *DashScopeProvider) listNativeModels(ctx context.Context, media string) ([]map[string]any, error) {
 	var out []map[string]any
-	for _, m := range models {
-		if strVal(m["media"]) == media {
-			out = append(out, m)
+	seen := map[string]bool{}
+	pageSize := 100
+	for page := 1; page <= 50; page++ {
+		path := "/api/v1/models?" + dashscopeModelsQuery(media, page, pageSize)
+		m, err := p.getURL(ctx, p.base+path)
+		if err != nil {
+			return nil, err
+		}
+		items, total, err := parseDashScopeModelsPage(m, media)
+		if err != nil {
+			return nil, err
+		}
+		for _, it := range items {
+			id := strVal(it["id"])
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, it)
+		}
+		if total > 0 && len(seen) >= total {
+			break
+		}
+		if len(items) < pageSize {
+			break
 		}
 	}
 	return out, nil
+}
+
+func (p *DashScopeProvider) getURL(ctx context.Context, url string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Accept", "application/json")
+	return p.do(req)
 }
 
 func (p *DashScopeProvider) GetRegistry(ctx context.Context) (map[string]any, error) {
@@ -102,11 +181,19 @@ func (p *DashScopeProvider) CreateImage(ctx context.Context, body map[string]any
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("dashscope API key not configured")
 	}
-	model := first(strVal(body["model"]), "wanx-v1")
+	model := first(strVal(body["model"]), "qwen-image-3.0-pro")
+	prompt := strVal(body["prompt"])
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt is required")
+	}
+	size := dashImageSize(strVal(body["size"]))
+	if dashUsesMultimodalImage(model) {
+		return p.createImageMultimodal(ctx, model, prompt, size)
+	}
 	payload := map[string]any{
 		"model": model,
-		"input": map[string]any{"prompt": strVal(body["prompt"])},
-		"parameters": map[string]any{"size": first(strVal(body["size"]), "1024*1024"), "n": 1},
+		"input": map[string]any{"prompt": prompt},
+		"parameters": map[string]any{"size": size, "n": 1},
 	}
 	m, err := p.postJSON(ctx, "/api/v1/services/aigc/text2image/image-synthesis", payload, true)
 	if err != nil {
@@ -122,6 +209,107 @@ func (p *DashScopeProvider) CreateImage(ctx context.Context, body map[string]any
 		return nil, fmt.Errorf("dashscope image task id missing")
 	}
 	return taskEnvelope(tid, "queued", "image", nil), nil
+}
+
+// dashUsesMultimodalImage: Qwen-Image / Wan 2.6+ image / Wan 2.7-image / Z-Image
+// use /aigc/multimodal-generation/generation (sync). Works on both open-platform
+// (dashscope.aliyuncs.com) and Token Plan (token-plan.*.maas.aliyuncs.com) hosts.
+// Older wanx* stay on text2image async (open-platform only).
+func dashUsesMultimodalImage(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.HasPrefix(m, "qwen-image"):
+		return true
+	case strings.HasPrefix(m, "wan2.6-image"), strings.HasPrefix(m, "wan2.7-image"),
+		strings.HasPrefix(m, "wan2.6-t2i"), strings.HasPrefix(m, "wan2.5-t2i"):
+		return true
+	case strings.HasPrefix(m, "wan2.6"), strings.HasPrefix(m, "wan2.7"):
+		// wan2.6-t2v / wan2.7-i2v are video — not multimodal image.
+		if strings.Contains(m, "-t2v") || strings.Contains(m, "-i2v") || strings.Contains(m, "-kf2v") || strings.Contains(m, "video") {
+			return false
+		}
+		return strings.Contains(m, "image") || strings.Contains(m, "t2i")
+	case strings.HasPrefix(m, "z-image"):
+		return true
+	default:
+		return false
+	}
+}
+
+func dashImageSize(size string) string {
+	size = strings.TrimSpace(size)
+	if size == "" {
+		return "1024*1024"
+	}
+	return strings.ReplaceAll(size, "x", "*")
+}
+
+func (p *DashScopeProvider) createImageMultimodal(ctx context.Context, model, prompt, size string) (map[string]any, error) {
+	params := map[string]any{"n": 1}
+	if size != "" {
+		params["size"] = size
+	}
+	payload := map[string]any{
+		"model": model,
+		"input": map[string]any{
+			"messages": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{"text": prompt},
+					},
+				},
+			},
+		},
+		"parameters": params,
+	}
+	m, err := p.postJSON(ctx, "/api/v1/services/aigc/multimodal-generation/generation", payload, false)
+	if err != nil {
+		return nil, err
+	}
+	url := dashMultimodalImageURL(m)
+	if url == "" {
+		// Some workspace/model combos still return async task ids.
+		tid := ""
+		if out, ok := m["output"].(map[string]any); ok {
+			tid = strVal(out["task_id"])
+		}
+		if tid == "" {
+			tid = nestedOrFlatID(m)
+		}
+		if tid != "" {
+			return taskEnvelope(tid, "queued", "image", nil), nil
+		}
+		return nil, fmt.Errorf("dashscope multimodal image missing url: %v", m)
+	}
+	tid := "img_" + first(strVal(m["request_id"]), fmt.Sprintf("%d", time.Now().UnixNano()))
+	p.mu.Lock()
+	p.urls[tid] = url
+	p.mu.Unlock()
+	return taskEnvelope(tid, "completed", "image", map[string]any{"asset_ids": []string{url}}), nil
+}
+
+func dashMultimodalImageURL(m map[string]any) string {
+	out, _ := m["output"].(map[string]any)
+	if out == nil {
+		return ""
+	}
+	if u := dashResultsURL(out); u != "" {
+		return u
+	}
+	choices, _ := out["choices"].([]any)
+	for _, c := range choices {
+		cm, _ := c.(map[string]any)
+		msg, _ := cm["message"].(map[string]any)
+		content, _ := msg["content"].([]any)
+		for _, part := range content {
+			pm, _ := part.(map[string]any)
+			if u := first(strVal(pm["image"]), strVal(pm["url"])); u != "" {
+				return u
+			}
+		}
+	}
+	return ""
 }
 
 func (p *DashScopeProvider) CreateVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
@@ -167,6 +355,14 @@ func (p *DashScopeProvider) submitVideo(ctx context.Context, body map[string]any
 }
 
 func (p *DashScopeProvider) GetTask(ctx context.Context, taskID string) (map[string]any, error) {
+	// Sync multimodal image tasks are cached locally (no /tasks poll).
+	p.mu.Lock()
+	if u := p.urls[taskID]; u != "" && strings.HasPrefix(taskID, "img_") {
+		p.mu.Unlock()
+		return taskEnvelope(taskID, "completed", "image", map[string]any{"asset_ids": []string{u}}), nil
+	}
+	p.mu.Unlock()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.base+"/api/v1/tasks/"+taskID, nil)
 	if err != nil {
 		return nil, err
@@ -181,10 +377,18 @@ func (p *DashScopeProvider) GetTask(ctx context.Context, taskID string) (map[str
 	if status == "queued" {
 		status = mapArkStatus(strVal(m["task_status"]))
 	}
+	url := first(strVal(outp["video_url"]), dashResultsURL(outp))
 	kind := "video"
+	if url == "" {
+		if img := first(strVal(outp["image_url"]), dashResultsURL(outp)); img != "" {
+			url = img
+			kind = "image"
+		}
+	} else if strings.Contains(strings.ToLower(url), ".png") || strings.Contains(strings.ToLower(url), ".jpg") {
+		kind = "image"
+	}
 	out := taskEnvelope(taskID, status, kind, nil)
 	if status == "completed" {
-		url := first(strVal(outp["video_url"]), dashResultsURL(outp))
 		if url == "" {
 			return nil, fmt.Errorf("dashscope completed task missing video/image url")
 		}
@@ -232,7 +436,11 @@ func (p *DashScopeProvider) do(req *http.Request) (map[string]any, error) {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("dashscope %s failed (%d): %s", req.URL.Path, resp.StatusCode, truncate(string(b), 400))
+		msg := truncate(string(b), 400)
+		if strings.Contains(string(b), "Unpurchased") || strings.Contains(string(b), "Model not exist") {
+			return nil, fmt.Errorf("dashscope %s failed (%d): model not in this Key/plan — Token Plan 请选套餐列表中的 id（如 qwen-image-3.0-pro、wan2.7-image），并保持 Base URL 为 token-plan.*.maas…；开放平台用 sk- + dashscope.aliyuncs.com。raw: %s", req.URL.Path, resp.StatusCode, msg)
+		}
+		return nil, fmt.Errorf("dashscope %s failed (%d): %s", req.URL.Path, resp.StatusCode, msg)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(b, &m); err != nil {

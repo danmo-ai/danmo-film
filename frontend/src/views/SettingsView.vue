@@ -1,75 +1,236 @@
 <template>
-  <div class="settings-page settings-page--v2">
+  <div class="settings-page settings-page--rail">
     <aside class="settings-sidebar" :aria-label="$tt('settings.title')">
-      <div class="settings-sidebar__title">
-        <DqIcon><Setting /></DqIcon>
-        {{ $tt('settings.title') }}
-      </div>
-      <nav class="dq-download-menu" role="navigation" :aria-label="$tt('settings.title')">
+      <nav class="settings-nav" role="navigation" :aria-label="$tt('settings.title')">
         <button
           v-for="item in navItems"
           :key="item.id"
           type="button"
-          class="dq-download-menu__item"
-          :class="{ 'is-active': activeSection === item.id }"
+          class="settings-nav__item"
+          :class="{ 'settings-nav__item--active': activeSection === item.id }"
           @click="activeSection = item.id"
         >
-          <DqIcon class="dq-download-menu__icon"><component :is="item.icon" /></DqIcon>
-          <span class="dq-download-menu__label">{{ $tt(item.labelKey) }}</span>
+          <span class="settings-nav__icon" aria-hidden="true">
+            <DqIcon :size="14"><component :is="item.icon" /></DqIcon>
+          </span>
+          <span class="settings-nav__label">{{ $tt(item.labelKey) }}</span>
         </button>
       </nav>
     </aside>
 
-    <div class="settings-content-area">
-      <p v-if="loadError" class="settings-panel__error">{{ loadError }}</p>
+    <div class="settings-content">
+      <div class="settings-content__body">
+        <p v-if="loadError" class="settings-panel__error">{{ loadError }}</p>
 
-      <SettingsGeneralPanel
-        v-if="activeSection === 'general'"
-        :path-rows="pathRows"
-      />
+        <SettingsGeneralPanel
+          v-if="activeSection === 'general'"
+          :path-rows="pathRows"
+        />
 
-      <SettingsLlmPanel
-        v-else-if="activeSection === 'llm'"
-        :profiles="llmProfiles"
-        :default-model="llmDefaultModel"
-        :model-options="enabledModelOptions"
-        :protocols="llmProtocols"
-        :presets="llmPresets"
-        :dialects="llmDialects"
-        :url-placeholder="llmUrlPlaceholder"
-        :saving="saving"
-        :save-msg="saveMsg"
-        :save-error="saveError"
-        :refresh-state="llmRefreshState"
-        @update:default-model="setDefaultModel"
-        @add-profile="addProfileFromPreset"
-        @remove-profile="removeProfile"
-        @set-protocol="setProfileProtocol"
-        @set-default-dialect="setDefaultDialect"
-        @set-model-dialect="setModelDialect"
-        @apply-preset="applyPresetToProfile"
-        @refresh-models="refreshProviderModels"
-        @toggle-remote-model="toggleRemoteModel"
+        <SettingsLlmPanel
+          v-else-if="activeSection === 'llm'"
+          :profiles="llmProfiles"
+          :default-model="llmDefaultModel"
+          :model-options="enabledModelOptions"
+          :protocols="llmProtocols"
+          :presets="llmPresets"
+          :dialects="llmDialects"
+          :url-placeholder="llmUrlPlaceholder"
+          :refresh-state="llmRefreshState"
+          @update:default-model="setDefaultModel"
+          @remove-profile="removeProfile"
+          @set-protocol="setProfileProtocol"
+          @set-default-dialect="setDefaultDialect"
+          @set-model-dialect="setModelDialect"
+          @apply-preset="applyPresetToProfile"
+          @refresh-models="refreshProviderModels"
+          @toggle-remote-model="toggleRemoteModel"
+        />
+
+        <SettingsGenerationPanel
+          v-else-if="activeSection === 'generation'"
+          :title="$tt('settings.genProvider')"
+          :default-model-label="$tt('settings.genDefaultModel')"
+          :empty-hint="$tt('settings.genProvidersEmpty')"
+          :profiles="genProfiles"
+          :presets="genPresets"
+          :default-model="genDefaultModel"
+          :model-options="enabledGenModelRefs()"
+          :saving="saving"
+          :refresh-state="genRefreshState"
+          @update:default-model="setGenDefaultModel"
+          @refresh-models="refreshGenModels"
+          @remove-profile="removeGenProfile"
+          @toggle-model="toggleGenModel"
+        />
+
+        <SettingsGenerationPanel
+          v-else
+          :title="$tt('settings.imgProvider')"
+          :default-model-label="$tt('settings.imgDefaultModel')"
+          :empty-hint="$tt('settings.imgProvidersEmpty')"
+          :profiles="imgProfiles"
+          :presets="imgPresets"
+          :default-model="imgDefaultModel"
+          :model-options="enabledImgModelRefs()"
+          :saving="saving"
+          :refresh-state="imgRefreshState"
+          @update:default-model="setImgDefaultModel"
+          @refresh-models="refreshImgModels"
+          @remove-profile="removeImgProfile"
+          @toggle-model="toggleImgModel"
+        />
+      </div>
+
+      <LongVideoStepSaveBar
+        v-if="activeSection === 'llm' || activeSection === 'generation' || activeSection === 'image'"
+        :save-label="$tt('settings.saveProviders')"
+        :hint="
+          activeSection === 'llm'
+            ? $tt('settings.saveLlmProvidersHint')
+            : activeSection === 'image'
+              ? $tt('settings.saveImgProvidersHint')
+              : $tt('settings.saveGenProvidersHint')
+        "
+        :status="providerSaveStatus"
+        :status-label="providerSaveStatusLabel"
+        :loading="saving"
         @save="save"
-      />
-
-      <SettingsGenerationPanel
-        v-else
-        :generation="generation"
-        :volcengine="volcengine"
-        :dashscope="dashscope"
-        :minimax="minimax"
-        :gen-providers="genProviders"
-        :saving="saving"
-        :checking="checking"
-        :save-msg="saveMsg"
-        :save-error="saveError"
-        :provider-status="providerStatus"
-        @set-provider="setGenProvider"
-        @save="save"
-        @test="refreshStatus"
-      />
+      >
+        <template v-if="activeSection === 'llm'" #actions-before>
+          <DqButton size="sm" @click="openAddLlmProvider">
+            {{ $tt('settings.llmAddProvider') }}
+          </DqButton>
+        </template>
+        <template v-else-if="activeSection === 'generation'" #actions-before>
+          <DqButton size="sm" @click="openAddGenProvider">
+            {{ $tt('settings.llmAddProvider') }}
+          </DqButton>
+        </template>
+        <template v-else-if="activeSection === 'image'" #actions-before>
+          <DqButton size="sm" @click="openAddImgProvider">
+            {{ $tt('settings.llmAddProvider') }}
+          </DqButton>
+        </template>
+      </LongVideoStepSaveBar>
     </div>
+
+    <DqDrawer
+      v-model:open="llmAddDrawerOpen"
+      :title="$tt('settings.llmAddProvider')"
+      direction="rtl"
+      size="400px"
+      class="settings-provider-drawer"
+    >
+      <div class="settings-provider-drawer__body">
+        <p class="settings-provider-drawer__hint">{{ $tt('settings.llmAddProviderHint') }}</p>
+        <label class="settings-provider-drawer__field">
+          <span class="settings-provider-drawer__label">{{ $tt('settings.llmPreset') }}</span>
+          <DqSelect
+            size="sm"
+            class="settings-provider-drawer__select"
+            :model-value="llmAddPresetId"
+            @update:model-value="(v: unknown) => (llmAddPresetId = String(v ?? 'openai-chat'))"
+          >
+            <DqOption
+              v-for="p in llmPresets"
+              :key="p.id"
+              :value="p.id"
+              :label="p.label"
+            />
+          </DqSelect>
+        </label>
+        <p v-if="llmAddPresetMeta" class="settings-provider-drawer__meta">
+          {{ llmAddPresetMeta }}
+        </p>
+        <div class="settings-provider-drawer__actions">
+          <DqButton size="sm" @click="llmAddDrawerOpen = false">
+            {{ $tt('common.cancel') }}
+          </DqButton>
+          <DqButton type="primary" size="sm" @click="confirmAddLlmProvider">
+            {{ $tt('settings.llmAddProviderConfirm') }}
+          </DqButton>
+        </div>
+      </div>
+    </DqDrawer>
+
+    <DqDrawer
+      v-model:open="genAddDrawerOpen"
+      :title="$tt('settings.llmAddProvider')"
+      direction="rtl"
+      size="400px"
+      class="settings-provider-drawer"
+    >
+      <div class="settings-provider-drawer__body">
+        <p class="settings-provider-drawer__hint">{{ $tt('settings.genAddProviderHint') }}</p>
+        <label class="settings-provider-drawer__field">
+          <span class="settings-provider-drawer__label">{{ $tt('settings.genPreset') }}</span>
+          <DqSelect
+            size="sm"
+            class="settings-provider-drawer__select"
+            :model-value="genAddPresetId"
+            @update:model-value="(v: unknown) => (genAddPresetId = String(v ?? 'volcengine'))"
+          >
+            <DqOption
+              v-for="opt in genPresets"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
+          </DqSelect>
+        </label>
+        <p v-if="genAddPresetMeta" class="settings-provider-drawer__meta">
+          {{ genAddPresetMeta }}
+        </p>
+        <div class="settings-provider-drawer__actions">
+          <DqButton size="sm" @click="genAddDrawerOpen = false">
+            {{ $tt('common.cancel') }}
+          </DqButton>
+          <DqButton type="primary" size="sm" @click="confirmAddGenProvider">
+            {{ $tt('settings.llmAddProviderConfirm') }}
+          </DqButton>
+        </div>
+      </div>
+    </DqDrawer>
+
+    <DqDrawer
+      v-model:open="imgAddDrawerOpen"
+      :title="$tt('settings.llmAddProvider')"
+      direction="rtl"
+      size="400px"
+      class="settings-provider-drawer"
+    >
+      <div class="settings-provider-drawer__body">
+        <p class="settings-provider-drawer__hint">{{ $tt('settings.imgAddProviderHint') }}</p>
+        <label class="settings-provider-drawer__field">
+          <span class="settings-provider-drawer__label">{{ $tt('settings.genPreset') }}</span>
+          <DqSelect
+            size="sm"
+            class="settings-provider-drawer__select"
+            :model-value="imgAddPresetId"
+            @update:model-value="(v: unknown) => (imgAddPresetId = String(v ?? 'danmo-make'))"
+          >
+            <DqOption
+              v-for="opt in imgPresets"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
+          </DqSelect>
+        </label>
+        <p v-if="imgAddPresetMeta" class="settings-provider-drawer__meta">
+          {{ imgAddPresetMeta }}
+        </p>
+        <div class="settings-provider-drawer__actions">
+          <DqButton size="sm" @click="imgAddDrawerOpen = false">
+            {{ $tt('common.cancel') }}
+          </DqButton>
+          <DqButton type="primary" size="sm" @click="confirmAddImgProvider">
+            {{ $tt('settings.llmAddProviderConfirm') }}
+          </DqButton>
+        </div>
+      </div>
+    </DqDrawer>
   </div>
 </template>
 
@@ -78,13 +239,13 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   MagicStick,
   Monitor,
-  Setting,
   VideoCamera,
 } from '@danqing/dq-shell';
 import { toast } from '@/utils/feedback';
 import { $tt } from '@/utils/i18n';
 import {
   api,
+  type FilmGenProfile,
   type FilmLlmPreset,
   type FilmLlmProfile,
   type FilmProviderBlock,
@@ -94,8 +255,9 @@ import { DQ_STORAGE, getItem, setItem } from '@/utils/storage';
 import SettingsGeneralPanel from '@/components/settings/SettingsGeneralPanel.vue';
 import SettingsLlmPanel from '@/components/settings/SettingsLlmPanel.vue';
 import SettingsGenerationPanel from '@/components/settings/SettingsGenerationPanel.vue';
+import LongVideoStepSaveBar from '@/components/long-video/LongVideoStepSaveBar.vue';
 
-type SectionId = 'general' | 'llm' | 'generation';
+type SectionId = 'general' | 'llm' | 'generation' | 'image';
 
 interface NavItem {
   id: SectionId;
@@ -103,11 +265,12 @@ interface NavItem {
   icon: object;
 }
 
-const SECTION_IDS: SectionId[] = ['general', 'llm', 'generation'];
+const SECTION_IDS: SectionId[] = ['general', 'llm', 'generation', 'image'];
 
 const navItems: NavItem[] = [
   { id: 'general', labelKey: 'settings.general', icon: Monitor },
   { id: 'llm', labelKey: 'settings.llmProvider', icon: MagicStick },
+  { id: 'image', labelKey: 'settings.imgProvider', icon: MagicStick },
   { id: 'generation', labelKey: 'settings.genProvider', icon: VideoCamera },
 ];
 
@@ -148,11 +311,20 @@ const DEFAULT_LLM_DIALECTS: Array<{ id: string; label: string }> = [
 ];
 const llmDialects = ref<Array<{ id: string; label: string }>>([...DEFAULT_LLM_DIALECTS]);
 
-const genProviders = [
-  { value: 'volcengine', label: 'Volcengine Ark Seedance' },
-  { value: 'dashscope', label: 'DashScope 万相' },
-  { value: 'minimax', label: 'MiniMax Hailuo' },
-];
+const genPresets = computed(() => [
+  { value: 'danmo-make', label: $tt('settings.genVendorMake') },
+  { value: 'volcengine', label: $tt('settings.genVendorVolcengine') },
+  { value: 'dashscope', label: $tt('settings.genVendorDashscope') },
+  { value: 'minimax', label: $tt('settings.genVendorMinimax') },
+]);
+
+const imgPresets = computed(() => [
+  { value: 'danmo-make', label: $tt('settings.genVendorMake') },
+  { value: 'volcengine', label: $tt('settings.genVendorVolcengine') },
+  { value: 'dashscope', label: $tt('settings.genVendorDashscope') },
+  { value: 'minimax', label: $tt('settings.genVendorMinimax') },
+  { value: 'openai', label: $tt('settings.imgVendorOpenAI') },
+]);
 
 const PATH_LABEL_KEYS: Record<string, string> = {
   assets_root: 'settings.pathAssetsRoot',
@@ -163,7 +335,15 @@ const PATH_LABEL_KEYS: Record<string, string> = {
 };
 
 function emptyBlock(): FilmProviderBlock {
-  return { protocol: '', provider: '', base_url: '', api_key: '', model: '' };
+  return {
+    protocol: '',
+    provider: '',
+    base_url: '',
+    api_key: '',
+    model: '',
+    enabled: true,
+    models: [],
+  };
 }
 
 function newProfile(partial?: Partial<FilmLlmProfile>): FilmLlmProfile {
@@ -194,9 +374,8 @@ function normalizeLegacyProviderId(id: string): string {
 }
 
 const generation = reactive<FilmProviderBlock>(emptyBlock());
-const volcengine = reactive<FilmProviderBlock>(emptyBlock());
-const dashscope = reactive<FilmProviderBlock>(emptyBlock());
-const minimax = reactive<FilmProviderBlock>(emptyBlock());
+const genProfiles = ref<FilmGenProfile[]>([]);
+const imgProfiles = ref<FilmGenProfile[]>([]);
 const paths = ref<Record<string, string>>({});
 const llmProfiles = ref<FilmLlmProfile[]>([]);
 const llmDefaultModel = ref('');
@@ -218,20 +397,65 @@ const llmRefreshState = reactive<
   Record<string, { loading?: boolean; error?: string; items?: Array<{ id: string; label: string }> }>
 >({});
 
-type ProviderStatus = {
-  llm?: { provider_id?: string; available?: boolean };
-  generation?: {
-    provider_id?: string;
-    health?: { ok?: boolean; error?: string };
-  };
-};
-
 const loadError = ref('');
 const saveError = ref('');
 const saveMsg = ref('');
-const providerStatus = ref<ProviderStatus | null>(null);
 const saving = ref(false);
-const checking = ref(false);
+const genRefreshState = reactive<
+  Record<string, { loading?: boolean; error?: string; items?: Array<{ id: string; label: string }> }>
+>({});
+const imgRefreshState = reactive<
+  Record<string, { loading?: boolean; error?: string; items?: Array<{ id: string; label: string }> }>
+>({});
+const llmAddPresetId = ref('openai-chat');
+const llmAddDrawerOpen = ref(false);
+const genAddPresetId = ref('volcengine');
+const genAddDrawerOpen = ref(false);
+const imgAddPresetId = ref('danmo-make');
+const imgAddDrawerOpen = ref(false);
+const genDefaultModel = ref('');
+const imgDefaultModel = ref('');
+
+const GEN_DEFAULTS: Record<string, { base_url: string }> = {
+  'danmo-make': { base_url: 'http://127.0.0.1:7800' },
+  volcengine: { base_url: 'https://ark.cn-beijing.volces.com' },
+  dashscope: { base_url: 'https://dashscope.aliyuncs.com' },
+  minimax: { base_url: 'https://api.minimax.chat' },
+  openai: { base_url: 'https://api.openai.com/v1' },
+};
+
+const llmAddPresetMeta = computed(() => {
+  const preset = llmPresets.value.find((p) => p.id === llmAddPresetId.value);
+  if (!preset) return '';
+  const parts: string[] = [];
+  if (preset.protocol) parts.push(preset.protocol);
+  if (preset.base_url) parts.push(preset.base_url);
+  return parts.join(' · ');
+});
+
+const genAddPresetMeta = computed(() => {
+  const id = normalizeGenVendor(genAddPresetId.value);
+  return GEN_DEFAULTS[id]?.base_url || '';
+});
+
+const imgAddPresetMeta = computed(() => {
+  const id = normalizeImgVendor(imgAddPresetId.value);
+  return GEN_DEFAULTS[id]?.base_url || '';
+});
+
+const providerSaveStatus = computed(() => {
+  if (saving.value) return 'saving';
+  if (saveError.value) return 'error';
+  if (saveMsg.value) return 'saved';
+  return 'idle';
+});
+
+const providerSaveStatusLabel = computed(() => {
+  if (saving.value) return $tt('video.longVideoAutoSaveSaving');
+  if (saveError.value) return saveError.value;
+  if (saveMsg.value) return saveMsg.value;
+  return '';
+});
 
 const pathRows = computed(() =>
   Object.entries(paths.value).map(([key, value]) => ({
@@ -260,22 +484,333 @@ const enabledModelOptions = computed(() => {
   return opts;
 });
 
-function setGenProvider(v: unknown) {
+function normalizeGenVendor(v: unknown): string {
   const raw = String(v ?? '').trim();
   const map: Record<string, string> = {
+    'danmo-make': 'danmo-make',
+    make: 'danmo-make',
+    danqing: 'danmo-make',
+    'Danmo Make': 'danmo-make',
     volcengine: 'volcengine',
     'Volcengine Ark Seedance': 'volcengine',
+    火山引擎: 'volcengine',
     dashscope: 'dashscope',
     'DashScope 万相': 'dashscope',
+    阿里云: 'dashscope',
     minimax: 'minimax',
     'MiniMax Hailuo': 'minimax',
-    // Migrate legacy Make selection → Volcengine
-    'danmo-make': 'volcengine',
-    make: 'volcengine',
-    'Danmo Make': 'volcengine',
+    MiniMax: 'minimax',
   };
-  const s = map[raw] || raw;
-  if (s) generation.provider = s;
+  return map[raw] || raw || 'volcengine';
+}
+
+function normalizeImgVendor(v: unknown): string {
+  const raw = String(v ?? '').trim();
+  if (raw === 'openai' || raw === 'OpenAI' || raw === 'dall-e' || raw === 'dalle') return 'openai';
+  return normalizeGenVendor(raw) || 'danmo-make';
+}
+
+function newGenProfile(partial?: Partial<FilmGenProfile>): FilmGenProfile {
+  const vendor = normalizeGenVendor(partial?.vendor || 'volcengine');
+  const preset = genPresets.value.find((p) => p.value === vendor);
+  const id =
+    partial?.id?.trim() ||
+    `${vendor}-${Date.now().toString(36)}`;
+  return {
+    id,
+    label: (partial?.label || preset?.label || vendor).trim(),
+    vendor,
+    base_url: (partial?.base_url || GEN_DEFAULTS[vendor]?.base_url || '').trim(),
+    api_key: partial?.api_key || '',
+    enabled: partial?.enabled ?? true,
+    models: (partial?.models || []).map((m) => ({
+      id: String(m.id || '').trim(),
+      label: String(m.label || m.id || '').trim(),
+      enabled: m.enabled !== false,
+    })).filter((m) => m.id),
+  };
+}
+
+function enabledGenModelRefs(): Array<{ value: string; label: string }> {
+  const opts: Array<{ value: string; label: string }> = [];
+  for (const p of genProfiles.value) {
+    if (!p.enabled) continue;
+    const pid = (p.id || '').trim();
+    if (!pid) continue;
+    const plabel = (p.label || pid).trim();
+    for (const m of p.models || []) {
+      if (!m.enabled || !m.id?.trim()) continue;
+      const mid = m.id.trim();
+      opts.push({
+        value: `${pid}/${mid}`,
+        label: `${plabel} / ${(m.label || mid).trim()}`,
+      });
+    }
+  }
+  return opts;
+}
+
+function resolveGenModelRef(raw: string): string {
+  const s = String(raw || '').trim();
+  const opts = enabledGenModelRefs();
+  if (s && opts.some((o) => o.value === s)) return s;
+  return opts[0]?.value || '';
+}
+
+function syncGenDefaultModel() {
+  genDefaultModel.value = resolveGenModelRef(genDefaultModel.value);
+  const ref = genDefaultModel.value;
+  if (ref.includes('/')) {
+    generation.provider = ref.split('/')[0];
+  }
+}
+
+function setGenDefaultModel(v: unknown) {
+  genDefaultModel.value = String(v ?? '').trim();
+  syncGenDefaultModel();
+  void save({ quiet: true });
+}
+
+function openAddGenProvider() {
+  if (!genPresets.value.some((p) => p.value === genAddPresetId.value)) {
+    genAddPresetId.value = genPresets.value[0]?.value || 'volcengine';
+  }
+  genAddDrawerOpen.value = true;
+}
+
+function confirmAddGenProvider() {
+  const vendor = normalizeGenVendor(genAddPresetId.value);
+  if (!genPresets.value.some((o) => o.value === vendor)) return;
+  const profile = newGenProfile({ vendor });
+  genProfiles.value = [...genProfiles.value, profile];
+  syncGenDefaultModel();
+  genAddDrawerOpen.value = false;
+  void save({ quiet: true });
+}
+
+function removeGenProfile(idx: number) {
+  if (idx < 0 || idx >= genProfiles.value.length) return;
+  genProfiles.value = genProfiles.value.filter((_, i) => i !== idx);
+  syncGenDefaultModel();
+  void save({ quiet: true });
+}
+
+function toggleGenModel(
+  profile: FilmGenProfile,
+  model: { id: string; label?: string },
+  on: boolean,
+) {
+  if (!profile.models) profile.models = [];
+  const id = model.id.trim();
+  const idx = profile.models.findIndex((m) => m.id === id);
+  if (on) {
+    if (idx >= 0) {
+      profile.models[idx].enabled = true;
+      if (model.label) profile.models[idx].label = model.label;
+    } else {
+      profile.models.push({ id, label: model.label || id, enabled: true });
+    }
+  } else if (idx >= 0) {
+    profile.models[idx].enabled = false;
+  }
+  syncGenDefaultModel();
+  void save({ quiet: true });
+}
+
+function newImgProfile(partial?: Partial<FilmGenProfile>): FilmGenProfile {
+  const vendor = normalizeImgVendor(partial?.vendor || 'danmo-make');
+  const preset = imgPresets.value.find((p) => p.value === vendor);
+  const id = partial?.id?.trim() || `${vendor}-${Date.now().toString(36)}`;
+  return {
+    id,
+    label: (partial?.label || preset?.label || vendor).trim(),
+    vendor,
+    base_url: (partial?.base_url || GEN_DEFAULTS[vendor]?.base_url || '').trim(),
+    api_key: partial?.api_key || '',
+    enabled: partial?.enabled ?? true,
+    models: (partial?.models || [])
+      .map((m) => ({
+        id: String(m.id || '').trim(),
+        label: String(m.label || m.id || '').trim(),
+        enabled: m.enabled !== false,
+      }))
+      .filter((m) => m.id),
+  };
+}
+
+function enabledImgModelRefs(): Array<{ value: string; label: string }> {
+  const opts: Array<{ value: string; label: string }> = [];
+  for (const p of imgProfiles.value) {
+    if (!p.enabled) continue;
+    const pid = (p.id || '').trim();
+    if (!pid) continue;
+    const plabel = (p.label || pid).trim();
+    for (const m of p.models || []) {
+      if (!m.enabled || !m.id?.trim()) continue;
+      const mid = m.id.trim();
+      opts.push({
+        value: `${pid}/${mid}`,
+        label: `${plabel} / ${(m.label || mid).trim()}`,
+      });
+    }
+  }
+  return opts;
+}
+
+function resolveImgModelRef(raw: string): string {
+  const s = String(raw || '').trim();
+  const opts = enabledImgModelRefs();
+  if (s && opts.some((o) => o.value === s)) return s;
+  return opts[0]?.value || '';
+}
+
+function syncImgDefaultModel() {
+  imgDefaultModel.value = resolveImgModelRef(imgDefaultModel.value);
+}
+
+function setImgDefaultModel(v: unknown) {
+  imgDefaultModel.value = String(v ?? '').trim();
+  syncImgDefaultModel();
+  void save({ quiet: true });
+}
+
+function openAddImgProvider() {
+  if (!imgPresets.value.some((p) => p.value === imgAddPresetId.value)) {
+    imgAddPresetId.value = imgPresets.value[0]?.value || 'danmo-make';
+  }
+  imgAddDrawerOpen.value = true;
+}
+
+function confirmAddImgProvider() {
+  const vendor = normalizeImgVendor(imgAddPresetId.value);
+  if (!imgPresets.value.some((o) => o.value === vendor)) return;
+  imgProfiles.value = [...imgProfiles.value, newImgProfile({ vendor })];
+  syncImgDefaultModel();
+  imgAddDrawerOpen.value = false;
+  void save({ quiet: true });
+}
+
+function removeImgProfile(idx: number) {
+  if (idx < 0 || idx >= imgProfiles.value.length) return;
+  imgProfiles.value = imgProfiles.value.filter((_, i) => i !== idx);
+  syncImgDefaultModel();
+  void save({ quiet: true });
+}
+
+function toggleImgModel(
+  profile: FilmGenProfile,
+  model: { id: string; label?: string },
+  on: boolean,
+) {
+  if (!profile.models) profile.models = [];
+  const id = model.id.trim();
+  const idx = profile.models.findIndex((m) => m.id === id);
+  if (on) {
+    if (idx >= 0) {
+      profile.models[idx].enabled = true;
+      if (model.label) profile.models[idx].label = model.label;
+    } else {
+      profile.models.push({ id, label: model.label || id, enabled: true });
+    }
+  } else if (idx >= 0) {
+    profile.models[idx].enabled = false;
+  }
+  syncImgDefaultModel();
+  void save({ quiet: true });
+}
+
+function parseImgProfilesFromSettings(data: FilmSettingsPayload): FilmGenProfile[] {
+  const raw = data.providers?.image_profiles as unknown;
+  const known = new Set(imgPresets.value.map((o) => o.value));
+  if (!Array.isArray(raw) || !raw.length) return [];
+  if (typeof raw[0] === 'object' && raw[0] !== null) {
+    return (raw as FilmGenProfile[])
+      .map((p) =>
+        newImgProfile({
+          id: p.id,
+          label: p.label,
+          vendor: normalizeImgVendor(p.vendor || p.id),
+          base_url: p.base_url,
+          api_key: p.api_key,
+          enabled: p.enabled,
+          models: p.models,
+        }),
+      )
+      .filter((p) => known.has(p.vendor) && p.id);
+  }
+  return [];
+}
+
+function parseGenProfilesFromSettings(data: FilmSettingsPayload): FilmGenProfile[] {
+  const raw = data.providers?.generation_profiles as unknown;
+  const known = new Set(genPresets.value.map((o) => o.value));
+  if (Array.isArray(raw) && raw.length && typeof raw[0] === 'object' && raw[0] !== null) {
+    return (raw as FilmGenProfile[])
+      .map((p) =>
+        newGenProfile({
+          id: p.id,
+          label: p.label,
+          vendor: normalizeGenVendor(p.vendor || p.id),
+          base_url: p.base_url,
+          api_key: p.api_key,
+          enabled: p.enabled,
+          models: p.models,
+        }),
+      )
+      .filter((p) => known.has(p.vendor) && p.id);
+  }
+  // Legacy: string[] of vendor ids + fixed providers.<vendor> blocks.
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(raw)) {
+    for (const x of raw as string[]) {
+      const id = normalizeGenVendor(x);
+      if (!known.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+  }
+  const active = normalizeGenVendor(data.providers?.generation?.provider || '');
+  if (active && known.has(active) && !seen.has(active)) {
+    ids.unshift(active);
+    seen.add(active);
+  }
+  const blocks: Record<string, FilmProviderBlock | undefined> = {
+    'danmo-make': data.providers?.['danmo-make'],
+    volcengine: data.providers?.volcengine,
+    dashscope: data.providers?.dashscope,
+    minimax: data.providers?.minimax,
+  };
+  if (!ids.length) {
+    for (const id of known) {
+      const b = blocks[id];
+      if (String(b?.api_key || '').trim() || (b?.models || []).some((m) => m.enabled && m.id)) {
+        ids.push(id);
+      }
+    }
+  }
+  return ids.map((vendor) => {
+    const b = blocks[vendor] || {};
+    let base = String(b.base_url || '').trim();
+    let key = String(b.api_key || '').trim();
+    let models = Array.isArray(b.models) ? b.models : [];
+    if (vendor === 'danmo-make' && !base) {
+      base = String(data.providers?.generation?.base_url || '').trim();
+      if (!key) key = String(data.providers?.generation?.api_key || '').trim();
+    }
+    if (!models.length && b.model) {
+      models = [{ id: b.model, label: b.model, enabled: true }];
+    }
+    return newGenProfile({
+      id: vendor,
+      label: genPresets.value.find((p) => p.value === vendor)?.label || vendor,
+      vendor,
+      base_url: base || GEN_DEFAULTS[vendor]?.base_url || '',
+      api_key: key,
+      enabled: b.enabled !== false,
+      models,
+    });
+  });
 }
 
 function setDefaultModel(v: unknown) {
@@ -294,6 +829,18 @@ function setProfileProtocol(profile: FilmLlmProfile, v: unknown) {
     Anthropic: 'anthropic',
   };
   profile.protocol = map[raw] || raw || 'openai';
+}
+
+function openAddLlmProvider() {
+  if (!llmPresets.value.some((p) => p.id === llmAddPresetId.value)) {
+    llmAddPresetId.value = llmPresets.value[0]?.id || 'openai-chat';
+  }
+  llmAddDrawerOpen.value = true;
+}
+
+function confirmAddLlmProvider() {
+  addProfileFromPreset(llmAddPresetId.value);
+  llmAddDrawerOpen.value = false;
 }
 
 function addProfileFromPreset(presetId?: string) {
@@ -468,6 +1015,16 @@ function assign(target: FilmProviderBlock, src?: FilmProviderBlock) {
   target.base_url = src?.base_url ?? '';
   target.api_key = src?.api_key ?? '';
   target.model = src?.model ?? '';
+  target.enabled = src?.enabled !== false;
+  // Only persist models the user enabled after refresh — do not invent from legacy model field.
+  const models = Array.isArray(src?.models) ? src!.models! : [];
+  target.models = models
+    .map((m) => ({
+      id: String(m.id || '').trim(),
+      label: String(m.label || m.id || '').trim(),
+      enabled: m.enabled !== false,
+    }))
+    .filter((m) => m.id);
 }
 
 async function load() {
@@ -475,12 +1032,15 @@ async function load() {
   try {
     const data = await api.settings.getFilmSettings();
     assign(generation, data.providers?.generation);
-    if (!generation.provider || generation.provider === 'danmo-make' || generation.provider === 'make') {
-      generation.provider = 'volcengine';
+    genProfiles.value = parseGenProfilesFromSettings(data);
+    imgProfiles.value = parseImgProfilesFromSettings(data);
+    if (!generation.provider && genProfiles.value.length) {
+      generation.provider = genProfiles.value[0].id;
     }
-    assign(volcengine, data.providers?.volcengine);
-    assign(dashscope, data.providers?.dashscope);
-    assign(minimax, data.providers?.minimax);
+    genDefaultModel.value = data.providers?.generation_default_model || '';
+    imgDefaultModel.value = data.providers?.image_default_model || '';
+    syncGenDefaultModel();
+    syncImgDefaultModel();
     paths.value = data.paths ?? {};
 
     try {
@@ -597,10 +1157,44 @@ function payload(): FilmSettingsPayload {
       llm_default_top_p: llmDefaultTopP.value,
       llm_default_thinking_mode: llmDefaultThinkingMode.value,
       llm_model_params: { ...llmModelParams.value },
-      generation: { ...generation },
-      volcengine: { ...volcengine },
-      dashscope: { ...dashscope },
-      minimax: { ...minimax },
+      generation: {
+        ...generation,
+        provider: genDefaultModel.value.includes('/')
+          ? genDefaultModel.value.split('/')[0]
+          : generation.provider || genProfiles.value[0]?.id || '',
+      },
+      generation_profiles: genProfiles.value.map((p) => ({
+        id: p.id.trim(),
+        label: (p.label || '').trim() || p.id,
+        vendor: normalizeGenVendor(p.vendor),
+        base_url: (p.base_url || '').trim(),
+        api_key: p.api_key ?? '',
+        enabled: Boolean(p.enabled),
+        models: (p.models || [])
+          .filter((m) => m.id?.trim())
+          .map((m) => ({
+            id: m.id.trim(),
+            label: (m.label || m.id).trim(),
+            enabled: Boolean(m.enabled),
+          })),
+      })),
+      generation_default_model: genDefaultModel.value || enabledGenModelRefs()[0]?.value || '',
+      image_profiles: imgProfiles.value.map((p) => ({
+        id: p.id.trim(),
+        label: (p.label || '').trim() || p.id,
+        vendor: normalizeImgVendor(p.vendor),
+        base_url: (p.base_url || '').trim(),
+        api_key: p.api_key ?? '',
+        enabled: Boolean(p.enabled),
+        models: (p.models || [])
+          .filter((m) => m.id?.trim())
+          .map((m) => ({
+            id: m.id.trim(),
+            label: (m.label || m.id).trim(),
+            enabled: Boolean(m.enabled),
+          })),
+      })),
+      image_default_model: imgDefaultModel.value || enabledImgModelRefs()[0]?.value || '',
     },
   };
 }
@@ -616,7 +1210,6 @@ async function save(opts?: { quiet?: boolean }) {
       toast.success($tt('settings.saveProvidersOk'));
     }
     await load();
-    if (!opts?.quiet) await refreshStatus();
   } catch (e: any) {
     saveError.value = e?.response?.data?.detail || e?.message || String(e);
   } finally {
@@ -624,27 +1217,86 @@ async function save(opts?: { quiet?: boolean }) {
   }
 }
 
-async function refreshStatus() {
-  checking.value = true;
+async function refreshProviderCatalog(
+  profile: FilmGenProfile,
+  media: 'video' | 'image',
+  state: Record<string, { loading?: boolean; error?: string; items?: Array<{ id: string; label: string }> }>,
+  onSync: () => void,
+  okKey: string,
+) {
+  const id = String(profile.id || '').trim();
+  if (!id) return;
+  state[id] = { ...(state[id] || {}), loading: true, error: '' };
   try {
-    const data = (await api.settings.providerStatus()) as ProviderStatus;
-    providerStatus.value = data;
+    await save({ quiet: true });
+    // Make has a real media tag — pass it. Cloud catalogs / untyped vendor lists:
+    // omit media so everything is shown; user enables what they want.
+    const params: Record<string, unknown> = { provider: id };
+    if (normalizeGenVendor(profile.vendor) === 'danmo-make' || normalizeImgVendor(profile.vendor) === 'danmo-make') {
+      params.media = media;
+    }
+    const data = (await api.models.list(params)) as {
+      items?: Array<Record<string, unknown>>;
+    };
+    const items = (data.items || [])
+      .map((row) => {
+        let mid = String(row.id || '').trim();
+        if (mid.includes('/')) mid = mid.slice(mid.indexOf('/') + 1);
+        if (!mid) return null;
+        const label = String(row.label || mid).trim() || mid;
+        return { id: mid, label };
+      })
+      .filter((x): x is { id: string; label: string } => Boolean(x));
+    state[id] = { loading: false, error: '', items };
+    if (!items.length) {
+      state[id].error = $tt('settings.llmRefreshModelsEmpty');
+      toast.error($tt('settings.llmRefreshModelsEmpty'));
+      return;
+    }
+    const prevOn = new Set((profile.models || []).filter((m) => m.enabled).map((m) => m.id));
+    profile.models = items.map((m) => ({
+      id: m.id,
+      label: m.label,
+      enabled: prevOn.has(m.id),
+    }));
+    onSync();
+    await save({ quiet: true });
+    toast.success($tt(okKey, { n: items.length }));
   } catch (e: any) {
-    providerStatus.value = null;
-    saveError.value = e?.response?.data?.detail || e?.message || String(e);
-  } finally {
-    checking.value = false;
+    const msg = e?.response?.data?.detail || e?.message || String(e);
+    state[id] = { ...(state[id] || {}), loading: false, error: msg };
+    toast.error(msg);
   }
+}
+
+async function refreshGenModels(profile: FilmGenProfile) {
+  await refreshProviderCatalog(
+    profile,
+    'video',
+    genRefreshState,
+    syncGenDefaultModel,
+    'settings.genRefreshModelsOk',
+  );
+}
+
+async function refreshImgModels(profile: FilmGenProfile) {
+  await refreshProviderCatalog(
+    profile,
+    'image',
+    imgRefreshState,
+    syncImgDefaultModel,
+    'settings.imgRefreshModelsOk',
+  );
 }
 
 onMounted(async () => {
   await load();
-  await refreshStatus();
 });
 </script>
 
 <style scoped>
-.settings-page--v2 {
+/* Full-height rail column — same 贯穿 divider chrome as create-page tab strip */
+.settings-page--rail {
   display: flex;
   width: 100%;
   height: 100%;
@@ -653,33 +1305,178 @@ onMounted(async () => {
 }
 
 .settings-sidebar {
-  width: 220px;
+  width: 168px;
   flex-shrink: 0;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 20px 12px 24px 20px;
+  padding: 12px 8px 20px 12px;
   border-right: 0.5px solid var(--dq-border-subtle);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--dq-surface-elevated) 55%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
   box-sizing: border-box;
-  overflow-y: auto;
 }
 
-.settings-sidebar__title {
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+}
+
+.settings-nav__item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 10px 9px 12px;
+  border: 0.5px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--dq-label-secondary);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, color 0.15s;
+}
+
+.settings-nav__item::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.settings-nav__item:hover:not(.settings-nav__item--active) {
+  background: color-mix(in srgb, var(--dq-fill-control) 65%, transparent);
+  color: var(--dq-label-primary);
+}
+
+.settings-nav__item:hover:not(.settings-nav__item--active) .settings-nav__label {
+  color: var(--dq-label-primary);
+}
+
+.settings-nav__item--active {
+  background: color-mix(in srgb, var(--dq-accent) 11%, transparent);
+  border-color: color-mix(in srgb, var(--dq-accent) 32%, transparent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--dq-accent) 8%, transparent);
+  color: var(--dq-label-primary);
+}
+
+.settings-nav__item--active::before {
+  background: var(--dq-accent);
+}
+
+.settings-nav__icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dq-label-tertiary);
+  background: transparent;
+  border: none;
+}
+
+.settings-nav__item--active .settings-nav__icon {
+  color: var(--dq-accent);
+}
+
+.settings-nav__label {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
+  font-weight: 650;
+  letter-spacing: var(--dq-tracking-tight, -0.01em);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dq-label-secondary);
+}
+
+.settings-nav__item--active .settings-nav__label {
+  color: var(--dq-label-primary);
+  font-weight: 700;
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 20px 28px 0;
+  box-sizing: border-box;
+}
+
+.settings-content__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 16px;
+}
+
+.settings-content :deep(.lv-step-save) {
+  margin-top: 0;
+  padding-bottom: 16px;
+}
+
+.settings-provider-drawer__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 8px;
+}
+
+.settings-provider-drawer__hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--dq-label-secondary);
+}
+
+.settings-provider-drawer__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-provider-drawer__label {
+  font-size: 12px;
   font-weight: 600;
   color: var(--dq-label-secondary);
 }
 
-.settings-content-area {
-  flex: 1;
-  min-width: 0;
-  overflow-y: auto;
-  padding: 20px 28px 32px;
-  box-sizing: border-box;
+.settings-provider-drawer__select {
+  width: 100%;
+}
+
+.settings-provider-drawer__meta {
+  margin: -8px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--dq-label-tertiary);
+  word-break: break-all;
+}
+
+.settings-provider-drawer__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .settings-panel__error {
@@ -691,21 +1488,21 @@ onMounted(async () => {
 
 <style>
 /* Shared panel chrome (child components) — open surface, no nested boxes */
-.settings-page--v2 .settings-grouped-form,
-.settings-page--v2 .dq-pref-pane.settings-pref-pane-form {
+.settings-page--rail .settings-grouped-form,
+.settings-page--rail .dq-pref-pane.settings-pref-pane-form {
   border: none;
   border-radius: 0;
   background: transparent;
   overflow: visible;
 }
 
-.settings-page--v2 .dq-pref-pane.settings-pref-pane-form .dq-pref-row {
+.settings-page--rail .dq-pref-pane.settings-pref-pane-form .dq-pref-row {
   padding-left: 0;
   padding-right: 0;
   min-height: 40px;
 }
 
-.settings-page--v2 .dq-pref-pane.settings-pref-pane-form .dq-pref-row + .dq-pref-row {
+.settings-page--rail .dq-pref-pane.settings-pref-pane-form .dq-pref-row + .dq-pref-row {
   border-top: 0.5px solid color-mix(in srgb, var(--dq-border-subtle) 55%, transparent);
 }
 

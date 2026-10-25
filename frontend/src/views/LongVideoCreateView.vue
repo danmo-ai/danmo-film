@@ -1079,7 +1079,7 @@ const segmentDurationOptions = [...SEGMENT_DURATION_CHOICES];
 const keyframeGenerating = computed(() => keyframeGeneratingIndex.value != null);
 
 const composeModelId = ref('z-image-turbo');
-const composeOutputSize = ref('1280x704');
+const composeOutputSize = ref('1280x720');
 const keyframeCompose = useLongVideoKeyframeCompose(composeModelId, composeOutputSize);
 const {
   params: keyframeComposeParams,
@@ -1743,7 +1743,7 @@ const projectOutputSize = computed(() => {
       ? seriesSize
       : project.value?.output_size || seriesSize;
   const picked = pickOutputSizeForModel(segmentModelId.value, saved);
-  return picked ?? segmentResolutionOptions.value[0]?.value ?? '1280x704';
+  return picked ?? segmentResolutionOptions.value[0]?.value ?? '1280x720';
 });
 
 const effectiveOverlapFrames = computed(() => {
@@ -1755,7 +1755,7 @@ const effectiveOverlapFrames = computed(() => {
 
 const outputSizePixels = computed(() => {
   const parsed = parseSizeValue(projectOutputSize.value);
-  return parsed ?? { width: 1280, height: 704 };
+  return parsed ?? { width: 1280, height: 720 };
 });
 
 const outputSizeLabel = computed(() => {
