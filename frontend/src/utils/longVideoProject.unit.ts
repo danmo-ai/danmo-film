@@ -57,7 +57,10 @@ import {
   charactersOnScreen,
   buildPortraitPrompt,
   buildIdentityFrontPrompt,
+  buildIdentityAnglePrompt,
   buildWardrobeRefPrompt,
+  enhanceSegmentVideoPrompt,
+  formatReferenceImageLegend,
   portraitAppearanceForPrompt,
   buildCastVisionBackfillQuestion,
   buildSceneVisionBackfillQuestion,
@@ -207,8 +210,15 @@ const wardrobePrompt = buildWardrobeRefPrompt(
   { id: 'l1', label: '日常', body: '白T恤黑短裤' },
   'cinematic',
   'zh',
+  ['front'],
 );
 assert(wardrobePrompt.includes('白T恤'), 'wardrobe prompt includes look outfit');
+assert(wardrobePrompt.includes('图1'), 'wardrobe prompt labels Image 1');
+assert(wardrobePrompt.includes('参考图说明'), 'wardrobe prompt has reference legend');
+
+const anglePrompt = buildIdentityAnglePrompt(identityChar, 'profile', 'cinematic', 'zh');
+assert(anglePrompt.includes('图1'), 'identity angle names Image 1');
+assert(anglePrompt.includes('正面'), 'identity angle cites front master');
 
 const appearanceSplit = portraitAppearanceForPrompt(
   {
@@ -342,6 +352,28 @@ assert(
   promptA.includes('勿复制身份参考') || promptA.includes('勿复制定妆') || promptA.includes('do not copy portrait'),
   'cast scene note',
 );
+
+const refLegend = formatReferenceImageLegend(
+  [
+    { asset_id: 'a1', purpose: 'identity', character_name: 'Alice', angle: 'front' },
+    { asset_id: 'a2', purpose: 'wardrobe', character_name: 'Alice', look_label: 'daily' },
+  ],
+  'zh',
+);
+assert(refLegend.includes('## 参考图说明'), 'legend heading');
+assert(refLegend.includes('图1'), 'legend image 1');
+assert(refLegend.includes('图2'), 'legend image 2');
+assert(refLegend.includes('服装参考'), 'legend wardrobe role');
+
+const r2vPrompt = enhanceSegmentVideoPrompt('人物转身挥手', {
+  locale: 'zh',
+  chainMode: 'reference_r2v',
+  referenceBindings: [
+    { asset_id: 'a1', purpose: 'identity', character_name: 'Alice', angle: 'front' },
+  ],
+});
+assert(r2vPrompt.includes('<Picture 1>'), 'r2v prompt uses Picture tags');
+assert(r2vPrompt.includes('人物转身挥手'), 'r2v keeps motion');
 
 const desertScenes = [
   {

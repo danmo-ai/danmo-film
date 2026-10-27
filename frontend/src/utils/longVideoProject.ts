@@ -651,16 +651,32 @@ export function segmentVideoSubmitPreview(
     chainMode?: LongVideoChainMode;
     locale?: 'zh' | 'en';
     shotIndex?: number;
+    characters?: LongVideoCharacter[];
   },
 ): string {
   const locale = opts.locale ?? (/[\u4e00-\u9fff]/.test(shotVideoPrompt(shot)) ? 'zh' : 'en');
-  const prompt = shotVideoPrompt(shot);
   const idx = opts.shotIndex ?? shots.findIndex((s) => s.id === shot.id);
   const srcId =
     idx >= 0
       ? segmentI2vSourceAssetId({ shots, chain_mode: opts.chainMode }, idx)
       : shot.keyframe_asset_id;
   const chain = effectiveShotChainMode(shot, opts.chainMode ?? 'keyframe_only');
+  const rawMotion = shotVideoPrompt(shot);
+  const refBindings =
+    idx >= 0
+      ? buildSegmentReferenceBindings(
+          { shots, chain_mode: opts.chainMode, characters: opts.characters },
+          idx,
+          opts.characters ?? [],
+        ).filter((b) => b.purpose === 'identity')
+      : [];
+  const prompt = rawMotion
+    ? enhanceSegmentVideoPrompt(rawMotion, {
+        locale,
+        chainMode: chain,
+        referenceBindings: refBindings,
+      })
+    : '';
   const lines: string[] = [];
   if (prompt) {
     const heading = locale === 'zh' ? '## 片段运动' : '## Clip motion';
@@ -915,6 +931,170 @@ export type LongVideoReferencePurpose =
 export interface LongVideoReferenceBinding {
   asset_id: string;
   purpose: LongVideoReferencePurpose;
+  /** Character display name when purpose is identity/wardrobe. */
+  character_name?: string;
+  /** Look label when purpose is wardrobe. */
+  look_label?: string;
+  /** Identity sheet angle when purpose is identity. */
+  angle?: CharacterIdentityAngle;
+  scene_name?: string;
+  scene_look_label?: string;
+}
+
+export function identityAngleDisplayName(
+  angle: CharacterIdentityAngle,
+  locale: 'zh' | 'en',
+): string {
+  return locale === 'zh' ? IDENTITY_ANGLE_PROMPT_ZH[angle] : IDENTITY_ANGLE_PROMPT_EN[angle];
+}
+
+export function referenceBindingRoleText(
+  b: LongVideoReferenceBinding,
+  locale: 'zh' | 'en',
+): string {
+  const name = (b.character_name || '').trim();
+  switch (b.purpose) {
+    case 'identity': {
+      const angle = b.angle ? identityAngleDisplayName(b.angle, locale) : '';
+      if (locale === 'zh') {
+        return (
+          `角色「${name || '未知'}」身份` +
+          (angle ? `·${angle}` : '') +
+          '（锁面部、发型与体型；勿复制其构图/纯色背景到成片）'
+        );
+      }
+      return (
+        `character "${name || 'unknown'}" identity` +
+        (angle ? ` (${angle})` : '') +
+        ' — lock face/hair/build; do not copy portrait framing or plain backdrop'
+      );
+    }
+    case 'wardrobe': {
+      const look = (b.look_label || '').trim();
+      return locale === 'zh'
+        ? `角色「${name || '未知'}」服装参考${look ? `「${look}」` : ''}（锁服饰剪影与配色）`
+        : `character "${name || 'unknown'}" wardrobe${look ? ` (${look})` : ''} — lock outfit silhouette and palette`;
+    }
+    case 'scene_layout': {
+      const sc = (b.scene_name || '').trim();
+      const lk = (b.scene_look_label || '').trim();
+      return locale === 'zh'
+        ? `场景设定${sc ? `「${sc}」` : ''}${lk ? `·${lk}` : ''}（锁空间结构与环境色调，人物以身份图为准）`
+        : `set reference${sc ? ` "${sc}"` : ''}${lk ? ` / ${lk}` : ''} — lock space and palette; faces follow identity refs`;
+    }
+    case 'style':
+      return locale === 'zh' ? '画风/风格参考' : 'style / look reference';
+    case 'start_frame':
+      return locale === 'zh' ? '视频首帧 / 起始画面' : 'video start / first frame';
+    case 'end_frame':
+      return locale === 'zh' ? '视频尾帧 / 结束画面' : 'video end / last frame';
+    default:
+      return locale === 'zh' ? '参考素材' : 'reference';
+  }
+}
+
+/** Markdown legend: 图N / Image N / `<Picture N>` ↔ binding role (order = API order). */
+export function formatReferenceImageLegend(
+  bindings: LongVideoReferenceBinding[],
+  locale: 'zh' | 'en',
+  opts?: { forVideo?: boolean },
+): string {
+  if (!bindings.length) return '';
+  const lines = bindings.map((b, i) => {
+    const n = i + 1;
+    const role = referenceBindingRoleText(b, locale);
+    if (opts?.forVideo) {
+      return locale === 'zh'
+        ? `- 图${n} / <Picture ${n}>：${role}`
+        : `- Image ${n} / <Picture ${n}>: ${role}`;
+    }
+    return locale === 'zh' ? `- 图${n}：${role}` : `- Image ${n}: ${role}`;
+  });
+  const heading = locale === 'zh' ? '## 参考图说明' : '## Reference images';
+  const note = opts?.forVideo
+    ? locale === 'zh'
+      ? '编号与提交的参考图顺序一致（图与视频分别计数）。提示词里用「图N」或 `<Picture N>` 指代其作用。'
+      : 'Indices match submitted reference order (images counted separately from videos). Use “Image N” or `<Picture N>`.'
+    : locale === 'zh'
+      ? '编号与提交的参考图顺序一致。提示词里用「图N」说明每张图的作用。'
+      : 'Indices match submitted reference order. Use “Image N” for each role.';
+  return `${heading}\n\n> ${note}\n\n${lines.join('\n')}`;
+}
+
+export function appendReferenceImageLegend(
+  prompt: string,
+  bindings: LongVideoReferenceBinding[],
+  locale: 'zh' | 'en',
+  opts?: { forVideo?: boolean },
+): string {
+  const legend = formatReferenceImageLegend(bindings, locale, opts);
+  if (!legend) return prompt.trim();
+  const base = prompt.trim();
+  return base ? `${base}\n\n${legend}` : legend;
+}
+
+/** Reorder/filter bindings to match the asset id list actually sent to the provider. */
+export function orderBindingsByAssetIds(
+  bindings: LongVideoReferenceBinding[],
+  assetIds: string[],
+): LongVideoReferenceBinding[] {
+  const byId = new Map<string, LongVideoReferenceBinding>();
+  for (const b of bindings) {
+    const id = b.asset_id.trim();
+    if (id && !byId.has(id)) byId.set(id, b);
+  }
+  const out: LongVideoReferenceBinding[] = [];
+  for (const raw of assetIds) {
+    const id = raw.trim();
+    if (!id) continue;
+    out.push(byId.get(id) ?? { asset_id: id, purpose: 'identity' });
+  }
+  return out;
+}
+
+/** Prefaces + optional 图N legend for segment video prompts. */
+export function enhanceSegmentVideoPrompt(
+  motion: string,
+  opts: {
+    locale: 'zh' | 'en';
+    chainMode: LongVideoChainMode;
+    referenceBindings?: LongVideoReferenceBinding[];
+  },
+): string {
+  const locale = opts.locale;
+  const motionBody = motion.trim();
+  if (!motionBody) return '';
+  let preface = '';
+  switch (opts.chainMode) {
+    case 'reference_r2v':
+      preface =
+        locale === 'zh'
+          ? '【参考生视频】按下方「参考图说明」中的图N / <Picture N> 理解每张参考图；生成与参考一致的角色外观，并完成下列运动与镜头。'
+          : '[Reference-to-video] Use Image N / <Picture N> in the legend below for each reference; keep cast appearance locked and perform the motion.';
+      break;
+    case 'first_last':
+      preface =
+        locale === 'zh'
+          ? '【首尾帧】以提交的首帧为起点、尾帧为终点；若有参考图，按「参考图说明」锁角色外观，中间过渡完成下列运动。'
+          : '[First–last] Start/end on the submitted frames; if references are attached, lock appearance via the legend and bridge with the motion below.';
+      break;
+    case 'last_frame':
+      preface =
+        locale === 'zh'
+          ? '【尾帧衔接】以提交的源图像作为本镜起始帧，按下列运动继续表演与运镜。'
+          : '[Tail chain] Use the submitted source image as this clip’s first frame; continue with the motion below.';
+      break;
+    default:
+      preface =
+        locale === 'zh'
+          ? '【分镜视频】以提交的源图像（分镜图）作为视频首帧，按下列运动与镜头生成片段。'
+          : '[Shot video] Use the submitted source image (keyframe) as the first frame; generate the clip from the motion below.';
+  }
+  const withPreface = `${preface}\n\n${motionBody}`;
+  const refBindings = (opts.referenceBindings ?? []).filter(
+    (b) => b.purpose === 'identity' || b.purpose === 'wardrobe' || b.purpose === 'scene_layout' || b.purpose === 'style',
+  );
+  return appendReferenceImageLegend(withPreface, refBindings, locale, { forVideo: true });
 }
 
 export function buildKeyframeReferenceBindings(
@@ -925,23 +1105,38 @@ export function buildKeyframeReferenceBindings(
   sceneLook?: LongVideoShotSceneLook,
   scenes?: LongVideoScene[],
 ): LongVideoReferenceBinding[] {
-  const grouped = collectKeyframeReferenceBindings(characters, castLooks, matchText, scope);
   const out: LongVideoReferenceBinding[] = [];
   const seen = new Set<string>();
-  for (const id of grouped.identity) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push({ asset_id: id, purpose: 'identity' });
-  }
-  for (const id of grouped.wardrobe) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push({ asset_id: id, purpose: 'wardrobe' });
-  }
-  const styleRef = grouped.style?.trim();
-  if (styleRef && !seen.has(styleRef)) {
-    seen.add(styleRef);
-    out.push({ asset_id: styleRef, purpose: 'style' });
+  if (scope === 'none') {
+    // scene / style only below
+  } else {
+    const roster = normalizeCharacterRoster(characters);
+    for (const cl of resolveShotCastLooks(roster, castLooks, matchText)) {
+      const ch = roster.find((c) => c.id === cl.character_id);
+      if (!ch) continue;
+      for (const angle of CHARACTER_IDENTITY_CORE_ANGLES) {
+        const id = identityViewAssetId(ch, angle);
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        out.push({
+          asset_id: id,
+          purpose: 'identity',
+          character_name: ch.name,
+          angle,
+        });
+      }
+      const look = ch.looks.find((l) => l.id === cl.look_id);
+      const wId = lookWardrobeRefId(look);
+      if (wId && !seen.has(wId)) {
+        seen.add(wId);
+        out.push({
+          asset_id: wId,
+          purpose: 'wardrobe',
+          character_name: ch.name,
+          look_label: look?.label,
+        });
+      }
+    }
   }
   if (sceneLook?.scene_id && scenes?.length) {
     const sc = scenes.find((s) => s.id === sceneLook.scene_id);
@@ -949,7 +1144,12 @@ export function buildKeyframeReferenceBindings(
     const envRef = lk?.reference_asset_id?.trim();
     if (envRef && !seen.has(envRef)) {
       seen.add(envRef);
-      out.push({ asset_id: envRef, purpose: 'scene_layout' });
+      out.push({
+        asset_id: envRef,
+        purpose: 'scene_layout',
+        scene_name: sc?.name,
+        scene_look_label: lk?.label,
+      });
     }
   }
   return out;
@@ -995,19 +1195,19 @@ export function buildSegmentReferenceBindings(
   const out: LongVideoReferenceBinding[] = [];
   const seen = new Set<string>();
 
-  const push = (asset_id: string | undefined, purpose: LongVideoReferencePurpose) => {
-    const id = asset_id?.trim();
+  const push = (binding: LongVideoReferenceBinding) => {
+    const id = binding.asset_id?.trim();
     if (!id || seen.has(id)) return;
     seen.add(id);
-    out.push({ asset_id: id, purpose });
+    out.push({ ...binding, asset_id: id });
   };
 
   const sourceId = segmentI2vSourceAssetId(lv, index);
-  push(sourceId ?? undefined, 'start_frame');
+  if (sourceId) push({ asset_id: sourceId, purpose: 'start_frame' });
 
   const endId = segmentI2vEndFrameAssetId(lv, index) ?? shot.end_frame_asset_id;
-  if (chainMode === 'first_last') {
-    push(endId, 'end_frame');
+  if (chainMode === 'first_last' && endId) {
+    push({ asset_id: endId, purpose: 'end_frame' });
   }
 
   if (chainMode === 'reference_r2v' || chainMode === 'first_last') {
@@ -1015,11 +1215,26 @@ export function buildSegmentReferenceBindings(
     for (const cl of resolveShotCastLooks(roster, shot.cast_looks ?? [], shotCastMatchText(shot))) {
       const ch = roster.find((c) => c.id === cl.character_id);
       if (!ch) continue;
-      for (const id of collectIdentityAssetIds(ch)) {
-        push(id, 'identity');
+      for (const angle of CHARACTER_IDENTITY_CORE_ANGLES) {
+        const id = identityViewAssetId(ch, angle);
+        if (!id) continue;
+        push({
+          asset_id: id,
+          purpose: 'identity',
+          character_name: ch.name,
+          angle,
+        });
       }
-      const wId = lookWardrobeRefId(ch.looks.find((l) => l.id === cl.look_id));
-      push(wId, 'wardrobe');
+      const look = ch.looks.find((l) => l.id === cl.look_id);
+      const wId = lookWardrobeRefId(look);
+      if (wId) {
+        push({
+          asset_id: wId,
+          purpose: 'wardrobe',
+          character_name: ch.name,
+          look_label: look?.label,
+        });
+      }
     }
   }
   return out;
@@ -2461,7 +2676,7 @@ const IDENTITY_ANGLE_PROMPT_EN: Record<CharacterIdentityAngle, string> = {
   full_body: 'full-body standing front view head to toe',
 };
 
-/** Other identity angles — conditioned on front reference image. */
+/** Other identity angles — conditioned on front reference image (图1). */
 export function buildIdentityAnglePrompt(
   ch: LongVideoCharacter,
   angle: CharacterIdentityAngle,
@@ -2473,7 +2688,8 @@ export function buildIdentityAnglePrompt(
   const angleLine = locale === 'zh' ? IDENTITY_ANGLE_PROMPT_ZH[angle] : IDENTITY_ANGLE_PROMPT_EN[angle];
   if (locale === 'zh') {
     return (
-      `【身份视图·${angle}】与参考图为同一人，${angleLine}，单人，中性表情，` +
+      `【参考图说明】图1：角色「${ch.name}」身份正面主视图（锁面部、发型与体型）。` +
+      `【身份视图·${angle}】生成与图1同一人的新视角：${angleLine}，单人，中性表情，` +
       `纯色或简洁背景，锁住面部发型体型，不要换脸或改发色，不含剧情动作。` +
       `角色：${ch.name}` +
       (bits ? `，${bits}` : '') +
@@ -2482,7 +2698,8 @@ export function buildIdentityAnglePrompt(
     );
   }
   return (
-    `[Identity ${angle}] same person as the reference image, ${angleLine}, solo, neutral expression, ` +
+    `[Reference] Image 1: ${ch.name} identity front master (lock face/hair/build). ` +
+    `[Identity ${angle}] same person as Image 1, ${angleLine}, solo, neutral expression, ` +
     `plain background, lock face hair build, do not change identity, no action. ` +
     `Character: ${ch.name}` +
     (bits ? `, ${bits}` : '') +
@@ -2491,27 +2708,41 @@ export function buildIdentityAnglePrompt(
   );
 }
 
-/** Wardrobe reference for one look — same person as identity refs + outfit lock. */
+/**
+ * Wardrobe reference for one look — same person as identity refs + outfit lock.
+ * `identityAngles` must match reference_asset_ids order (default: front, three_quarter).
+ */
 export function buildWardrobeRefPrompt(
   ch: LongVideoCharacter,
   look: LongVideoCharacterLook,
   styleAnchor: string,
   locale: 'zh' | 'en',
+  identityAngles: CharacterIdentityAngle[] = ['front', 'three_quarter'],
 ): string {
   const style = styleAnchor.trim().slice(0, 120);
   const { appearance, wardrobe } = characterLookOutfitParts(ch, look, []);
   const outfit = [wardrobe, look.body.trim()].filter(Boolean).join(locale === 'zh' ? '，' : ', ')
     || appearance;
+  const angles = identityAngles.length ? identityAngles : (['front'] as CharacterIdentityAngle[]);
+  const refLines = angles.map((a, i) => {
+    const n = i + 1;
+    const angleName = identityAngleDisplayName(a, locale);
+    return locale === 'zh'
+      ? `图${n}：角色「${ch.name}」身份·${angleName}（锁面部/发型/体型）`
+      : `Image ${n}: ${ch.name} identity (${angleName}) — lock face/hair/build`;
+  });
   if (locale === 'zh') {
     return (
-      `【服装参考】与参考图为同一人，全身或半身服装设定，中性站姿，纯色或简洁背景，` +
+      `【参考图说明】${refLines.join('；')}。` +
+      `【服装参考】与上述身份图为同一人，全身或半身服装设定，中性站姿，纯色或简洁背景，` +
       `清晰展示本套服装剪影与细节，不含剧情动作。` +
       `角色：${ch.name}（${look.label}）。服装：${outfit}。` +
       (style ? `画风：${style}。` : '')
     );
   }
   return (
-    `[Wardrobe reference] same person as the reference image, full or half-body costume lock, ` +
+    `[Reference] ${refLines.join('; ')}. ` +
+    `[Wardrobe reference] same person as the identity images above, full or half-body costume lock, ` +
     `neutral stance, plain background, clear outfit silhouette and detail, no action. ` +
     `Character: ${ch.name} (${look.label}). Outfit: ${outfit}. ` +
     (style ? `Style: ${style}.` : '')

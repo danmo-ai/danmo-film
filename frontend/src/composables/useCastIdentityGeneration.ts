@@ -202,16 +202,24 @@ export function useCastIdentityGeneration(opts: {
     const ch = chars[ci];
     const look = ch?.looks[li];
     if (!ch || !look) return;
-    const identityRefs = [
-      identityFrontAssetId(ch),
-      ch.identity_sheet?.views.find((v) => v.angle === 'three_quarter')?.asset_id?.trim(),
-    ].filter(Boolean) as string[];
+    const identityAngleRefs: { angle: CharacterIdentityAngle; id: string }[] = [];
+    const frontId = identityFrontAssetId(ch);
+    if (frontId) identityAngleRefs.push({ angle: 'front', id: frontId });
+    const tqId = ch.identity_sheet?.views.find((v) => v.angle === 'three_quarter')?.asset_id?.trim();
+    if (tqId) identityAngleRefs.push({ angle: 'three_quarter', id: tqId });
+    const identityRefs = identityAngleRefs.map((r) => r.id);
     if (!identityRefs.length) {
       toast.warning($tt('video.longVideoIdentityFrontRequired'));
       return;
     }
     const locale = resolveLongVideoLocale(opts.getLocale());
-    const prompt = buildWardrobeRefPrompt(ch, look, opts.getStyleAnchor(), locale);
+    const prompt = buildWardrobeRefPrompt(
+      ch,
+      look,
+      opts.getStyleAnchor(),
+      locale,
+      identityAngleRefs.map((r) => r.angle),
+    );
     const key = portraitKey(ci, li);
     try {
       const assetId = await submitImage({

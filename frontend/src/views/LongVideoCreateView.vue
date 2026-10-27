@@ -483,8 +483,11 @@ import {
   buildSceneEnvironmentPrompt,
   resolveLongVideoLocale,
   buildWorkspaceSnapshot,
+  appendReferenceImageLegend,
   buildKeyframeReferenceBindings,
   buildSegmentReferenceBindings,
+  enhanceSegmentVideoPrompt,
+  orderBindingsByAssetIds,
   PRODUCTION_BLOCKER_LABEL_KEYS,
   episodeDeliveryChecklist,
   productionBlockers,
@@ -1624,16 +1627,24 @@ async function onGenerateWardrobeRef(ci: number, li: number) {
   const ch = chars[ci];
   const look = ch?.looks[li];
   if (!ch || !look) return;
-  const identityRefs = [
-    identityFrontAssetId(ch),
-    ch.identity_sheet?.views.find((v) => v.angle === 'three_quarter')?.asset_id?.trim(),
-  ].filter(Boolean) as string[];
+  const identityAngleRefs: { angle: CharacterIdentityAngle; id: string }[] = [];
+  const frontId = identityFrontAssetId(ch);
+  if (frontId) identityAngleRefs.push({ angle: 'front', id: frontId });
+  const tqId = ch.identity_sheet?.views.find((v) => v.angle === 'three_quarter')?.asset_id?.trim();
+  if (tqId) identityAngleRefs.push({ angle: 'three_quarter', id: tqId });
+  const identityRefs = identityAngleRefs.map((r) => r.id);
   if (!identityRefs.length) {
     toast.warning($tt('video.longVideoIdentityFrontRequired'));
     return;
   }
   const locale = resolveLongVideoLocale(uiLocale.value);
-  const prompt = buildWardrobeRefPrompt(ch, look, effectiveStyleAnchor.value, locale);
+  const prompt = buildWardrobeRefPrompt(
+    ch,
+    look,
+    effectiveStyleAnchor.value,
+    locale,
+    identityAngleRefs.map((r) => r.angle),
+  );
   const model = lv.portrait_model ?? lv.keyframe_model ?? defaultKeyframeModel.value;
   const { width, height } = PORTRAIT_REFERENCE_SIZE;
   const key = portraitKey(ci, li);
@@ -3704,7 +3715,11 @@ async function onGenerateKeyframe(index: number) {
 
   const seedNum = p.seed ? parseInt(String(p.seed), 10) : null;
   const { width, height } = outputSizePixels.value;
-  const t2iPrompt = keyframeGenerationPrompt(keyframeText, keyframeContextForShot(shot));
+  const t2iPrompt = appendReferenceImageLegend(
+    keyframeGenerationPrompt(keyframeText, keyframeContextForShot(shot)),
+    orderBindingsByAssetIds(refBindings, castRefIds),
+    locale,
+  );
 
   keyframeGeneratingIndex.value = index;
   try {
@@ -3867,8 +3882,8 @@ function buildSegmentSubmitBody(
   if (!shot || !canGenerateSegmentShot(lvProd, index)) return null;
   const sourceAssetId = segmentI2vSourceAssetId(lvProd, index);
   if (!sourceAssetId) return null;
-  const motion = shotVideoPrompt(shot);
-  if (!motion) return null;
+  const motionRaw = shotVideoPrompt(shot);
+  if (!motionRaw) return null;
 
   const chainMode = effectiveShotChainMode(shot, lvProd.chain_mode);
   const prevSegId = index > 0 ? lvProd.shots[index - 1]?.segment_asset_id : undefined;
@@ -3890,6 +3905,22 @@ function buildSegmentSubmitBody(
   const numFrames = numFramesForDurationSec(cappedDurationSec, fps, nfSchema);
   const { width, height } = outputSizePixels.value;
   const videoMode = chainModeToVideoMode(chainMode);
+  const segLocale = uiLocale.value.startsWith('zh') ? 'zh' : 'en';
+  const identitySegBindings = segRefBindings.filter((b) => b.purpose === 'identity');
+  const sendSegRefs = modelHasBerniniRenderer(segModel) || chainMode === 'reference_r2v';
+  const { ids: cappedSegRefs } = sendSegRefs
+    ? capReferenceAssetIds(
+        identitySegBindings.map((b) => b.asset_id),
+        segModelRow,
+      )
+    : { ids: [] as string[] };
+  const motion = enhanceSegmentVideoPrompt(motionRaw, {
+    locale: segLocale,
+    chainMode,
+    referenceBindings: sendSegRefs
+      ? orderBindingsByAssetIds(identitySegBindings, cappedSegRefs)
+      : [],
+  });
   const body: Record<string, unknown> = {
     model: segModel,
     mode: videoMode,
@@ -3929,13 +3960,9 @@ function buildSegmentSubmitBody(
     body.tail_asset_id = endFrameId;
     body.end_asset_id = endFrameId;
   }
-  if (modelHasBerniniRenderer(segModel) || chainMode === 'reference_r2v') {
-    const refIds = segRefBindings
-      .filter((b) => b.purpose === 'identity')
-      .map((b) => b.asset_id);
-    const { ids: cappedRefs } = capReferenceAssetIds(refIds, segModelRow);
-    if (cappedRefs.length) {
-      body.reference_asset_ids = cappedRefs;
+  if (sendSegRefs) {
+    if (cappedSegRefs.length) {
+      body.reference_asset_ids = cappedSegRefs;
     } else if (chainMode === 'reference_r2v') {
       return null;
     }

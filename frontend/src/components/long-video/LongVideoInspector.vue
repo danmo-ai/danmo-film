@@ -312,6 +312,9 @@ import { useI18n } from 'vue-i18n';
 import { Delete, Loading, PictureFilled } from '@danqing/dq-shell';
 import { api } from '@/utils/api';
 import {
+  appendReferenceImageLegend,
+  buildKeyframeReferenceBindings,
+  castReferenceScope,
   keyframeGenerationPrompt,
   keyframePromptContextForShot,
   buildKeyframeT2iProvenance,
@@ -531,7 +534,22 @@ const keyframeT2iPromptPreview = computed(() => {
   if (!selectedShot.value || !showFrameCompose.value) return '';
   const visual = keyframePromptText.value;
   if (!visual && !(props.characters?.length)) return '';
-  return keyframeGenerationPrompt(visual, keyframePromptCtx.value);
+  const base = keyframeGenerationPrompt(visual, keyframePromptCtx.value);
+  const shot = selectedShot.value;
+  const loc = String(locale.value).startsWith('zh') ? 'zh' : 'en';
+  const bindings = buildKeyframeReferenceBindings(
+    props.characters ?? [],
+    shot.cast_looks ?? [],
+    shotCastMatchText(shot),
+    castReferenceScope(
+      shot.first_frame_visibility,
+      shot.segment_role,
+      shot.is_establishing_empty,
+    ),
+    shot.scene_look,
+    props.scenes,
+  );
+  return appendReferenceImageLegend(base, bindings, loc);
 });
 
 const keyframePromptCtx = computed(() => {
@@ -579,6 +597,7 @@ const segmentI2vPromptPreview = computed(() => {
     chainMode: props.defaultChainMode,
     locale: String(locale.value).startsWith('zh') ? 'zh' : 'en',
     shotIndex: segmentIndex.value,
+    characters: props.characters,
   });
 });
 
