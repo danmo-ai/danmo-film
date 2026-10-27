@@ -388,6 +388,20 @@ const llmModelParams = ref<Record<string, {
   thinking_mode?: string;
   thinking_budget?: number;
 }>>({});
+/** Video/image capability catalogs; round-tripped like llm_model_params. */
+const videoModelParams = ref<Record<string, {
+  modes?: string[];
+  protocol?: string;
+  v2v_slot?: string;
+  max_reference_images?: number;
+  max_reference_videos?: number;
+  max_duration_sec?: number;
+}>>({});
+const imageModelParams = ref<Record<string, {
+  modes?: string[];
+  protocol?: string;
+  max_reference_images?: number;
+}>>({});
 const llmDefaultContextWindow = ref(256000);
 const llmDefaultMaxOutput = ref(128000);
 const llmDefaultTemperature = ref(0.35);
@@ -1102,6 +1116,8 @@ async function load() {
       enabledModelOptions.value[0]?.value ||
       '';
     llmModelParams.value = { ...(data.providers?.llm_model_params || {}) };
+    videoModelParams.value = { ...(data.providers?.video_model_params || {}) };
+    imageModelParams.value = { ...(data.providers?.image_model_params || {}) };
     llmDefaultContextWindow.value = Number(data.providers?.llm_default_context_window) || 256000;
     llmDefaultMaxOutput.value = Number(data.providers?.llm_default_max_output_tokens) || 128000;
     llmDefaultTemperature.value =
@@ -1157,6 +1173,8 @@ function payload(): FilmSettingsPayload {
       llm_default_top_p: llmDefaultTopP.value,
       llm_default_thinking_mode: llmDefaultThinkingMode.value,
       llm_model_params: { ...llmModelParams.value },
+      video_model_params: { ...videoModelParams.value },
+      image_model_params: { ...imageModelParams.value },
       generation: {
         ...generation,
         provider: genDefaultModel.value.includes('/')

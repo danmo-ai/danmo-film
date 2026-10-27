@@ -38,12 +38,58 @@ func LintPipeline(pipe *ScriptPipeline) []RuleFinding {
 				protag++
 			}
 			if c.Role == "supporting" || c.Role == "protagonist" {
-				if strings.TrimSpace(c.VisualIdentity) == "" && strings.TrimSpace(c.LookBody) == "" {
+				if strings.TrimSpace(c.VisualIdentity) == "" && !characterHasLookDesc(c) {
 					out = append(out, RuleFinding{
 						FindingID: nextID(), Source: "rule", Severity: "info",
 						Action: ActionFillField, ArtifactID: aid, FieldPath: pathBase + ".visual_identity",
-						Problem:           fmt.Sprintf("%s has no visual_identity or look_body", firstNonEmpty(c.Name, c.CharacterID)),
+						Problem:           fmt.Sprintf("%s has no visual_identity or look description", firstNonEmpty(c.Name, c.CharacterID)),
 						RepairInstruction: "fill visual_identity (face/build) from explicit script description; leave empty if none",
+						NeedsLLM:          true, Status: "open",
+					})
+				}
+			}
+			if c.Decision == DecisionReuse && strings.TrimSpace(c.ExistingCharacterID) == "" {
+				out = append(out, RuleFinding{
+					FindingID: nextID(), Source: "rule", Severity: "blocker",
+					Action: ActionFixValue, ArtifactID: aid, FieldPath: pathBase + ".existing_character_id",
+					Problem:           fmt.Sprintf("%s decision=reuse but existing_character_id is empty", firstNonEmpty(c.Name, c.CharacterID)),
+					RepairInstruction: "set existing_character_id from the Existing catalog or change decision to create",
+					NeedsLLM:          true, Status: "open",
+				})
+			}
+			for j, lk := range c.Looks {
+				if lk.Decision == DecisionReuse && strings.TrimSpace(lk.ExistingLookID) == "" {
+					out = append(out, RuleFinding{
+						FindingID: nextID(), Source: "rule", Severity: "blocker",
+						Action: ActionFixValue, ArtifactID: aid,
+						FieldPath:         fmt.Sprintf("%s.looks[%d].existing_look_id", pathBase, j),
+						Problem:           fmt.Sprintf("%s look decision=reuse but existing_look_id is empty", firstNonEmpty(c.Name, c.CharacterID)),
+						RepairInstruction: "set existing_look_id from the catalog or change look decision to create",
+						NeedsLLM:          true, Status: "open",
+					})
+				}
+			}
+		}
+		for i, loc := range pipe.EntityRegistry.Locations {
+			aid := "LOCATION_" + loc.LocationID
+			pathBase := fmt.Sprintf("entity_registry.locations[%d]", i)
+			if loc.Decision == DecisionReuse && strings.TrimSpace(loc.ExistingLocationID) == "" {
+				out = append(out, RuleFinding{
+					FindingID: nextID(), Source: "rule", Severity: "blocker",
+					Action: ActionFixValue, ArtifactID: aid, FieldPath: pathBase + ".existing_location_id",
+					Problem:           fmt.Sprintf("%s decision=reuse but existing_location_id is empty", firstNonEmpty(loc.Name, loc.LocationID)),
+					RepairInstruction: "set existing_location_id from the Existing catalog or change decision to create",
+					NeedsLLM:          true, Status: "open",
+				})
+			}
+			for j, lk := range loc.Looks {
+				if lk.Decision == DecisionReuse && strings.TrimSpace(lk.ExistingLookID) == "" {
+					out = append(out, RuleFinding{
+						FindingID: nextID(), Source: "rule", Severity: "blocker",
+						Action: ActionFixValue, ArtifactID: aid,
+						FieldPath:         fmt.Sprintf("%s.looks[%d].existing_look_id", pathBase, j),
+						Problem:           fmt.Sprintf("%s look decision=reuse but existing_look_id is empty", firstNonEmpty(loc.Name, loc.LocationID)),
+						RepairInstruction: "set existing_look_id from the catalog or change look decision to create",
 						NeedsLLM:          true, Status: "open",
 					})
 				}

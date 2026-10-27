@@ -267,19 +267,20 @@ func httpStatus(err error) int {
 }
 
 type processBody struct {
-	ScriptText         string                      `json:"script_text"`
-	Title              string                      `json:"title"`
-	Locale             string                      `json:"locale"`
-	Model              string                      `json:"model"`
-	LongVideoProjectID string                      `json:"long_video_project_id"`
-	Existing           *scriptparse.ScriptPipeline `json:"existing_pipeline"`
-	StopAt             string                      `json:"stop_at"`
-	UntilShots         bool                        `json:"until_shots"`
-	TargetDurationSec  float64                     `json:"target_duration_sec"`
-	SegmentDurationSec float64                     `json:"segment_duration_sec"`
-	MaxClipSec         float64                     `json:"max_clip_sec"`
-	OnlySceneIDs       []string                    `json:"only_scene_ids"`
-	RerunStage         string                      `json:"rerun_stage"`
+	ScriptText         string                       `json:"script_text"`
+	Title              string                       `json:"title"`
+	Locale             string                       `json:"locale"`
+	Model              string                       `json:"model"`
+	LongVideoProjectID string                       `json:"long_video_project_id"`
+	Existing           *scriptparse.ScriptPipeline  `json:"existing_pipeline"`
+	ExistingRoster     *scriptparse.ExistingRoster  `json:"existing_roster"`
+	StopAt             string                       `json:"stop_at"`
+	UntilShots         bool                         `json:"until_shots"`
+	TargetDurationSec  float64                      `json:"target_duration_sec"`
+	SegmentDurationSec float64                      `json:"segment_duration_sec"`
+	MaxClipSec         float64                      `json:"max_clip_sec"`
+	OnlySceneIDs       []string                     `json:"only_scene_ids"`
+	RerunStage         string                       `json:"rerun_stage"`
 }
 
 type approveBody struct {
@@ -510,6 +511,7 @@ func (a *App) runProcess(c *gin.Context, body processBody, on scriptparse.StageP
 		Locale:             localeFrom(c, body.Locale),
 		Model:              body.Model,
 		Existing:           body.Existing,
+		ExistingRoster:     body.ExistingRoster,
 		StopAt:             body.StopAt,
 		UntilShots:         body.UntilShots,
 		TargetDurationSec:  body.TargetDurationSec,

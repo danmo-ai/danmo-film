@@ -12,6 +12,19 @@ import (
 
 const SecretSentinel = "********"
 
+// SanitizeAPIKey clears masked placeholders that were accidentally persisted.
+func SanitizeAPIKey(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" || key == SecretSentinel {
+		return ""
+	}
+	// All-asterisk placeholders from older UI bugs.
+	if strings.Trim(key, "*") == "" {
+		return ""
+	}
+	return key
+}
+
 type Settings map[string]any
 
 func Load() (Settings, error) {
@@ -68,6 +81,8 @@ func Defaults() Settings {
 			"llm_default_thinking_mode":     "off",
 			"llm_model_params":              ModelParamsToAny(SeedLLMModelParamsFromPresets()),
 			"llm_profiles":                  ProfilesToAny(DefaultLLMProfiles()),
+			"video_model_params":            VideoModelParamsToAny(SeedVideoModelParamsFromPresets()),
+			"image_model_params":            ImageModelParamsToAny(SeedImageModelParamsFromPresets()),
 			"generation": map[string]any{
 				"provider": "volcengine",
 				"base_url": "",
@@ -113,6 +128,7 @@ func Hydrate(s Settings) Settings {
 	out := clone(Defaults())
 	deepMerge(out, s)
 	migrateProfileCapacityToModelParams(out)
+	ensureMediaModelParamsSeeds(out)
 	return out
 }
 
@@ -253,8 +269,8 @@ func restoreSentinelKeys(existing, incoming map[string]any) {
 		}
 		if k == "api_key" {
 			istr, _ := iv.(string)
-			estr, _ := ev.(string)
-			if istr == SecretSentinel {
+			estr := SanitizeAPIKey(fmt.Sprint(ev))
+			if istr == SecretSentinel || strings.Trim(strings.TrimSpace(istr), "*") == "" {
 				incoming[k] = estr
 			}
 		}

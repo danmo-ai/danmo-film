@@ -14,6 +14,7 @@ type ProcessOpts struct {
 	Locale             string
 	Model              string
 	Existing           *ScriptPipeline // for incremental
+	ExistingRoster     *ExistingRoster // text catalog for Story Map reuse decisions
 	StopAt             string          // stage to stop after (default gate1 for facts pass)
 	UntilShots         bool            // continue through R5–R7 after facts approved
 	TargetDurationSec  float64
@@ -130,7 +131,7 @@ func RunProcess(ctx context.Context, llm port.LLMProvider, opts ProcessOpts, on 
 	skipFactsStages := pipe.Workflow.FactsApproved && pipe.Continuity != nil && allScenesReusable(pipe.SceneChangeSet)
 	if needStoryMap {
 		if err := run(StageR1, func() (int, error) {
-			return RunStoryMap(ctx, llm, opts.Model, pipe, on)
+			return RunStoryMap(ctx, llm, opts.Model, pipe, opts.ExistingRoster, on)
 		}); err != nil {
 			pipe.Workflow.Status = "failed"
 			pipe.Workflow.Error = err.Error()
@@ -255,7 +256,7 @@ func rerunStage(ctx context.Context, llm port.LLMProvider, opts ProcessOpts, pip
 	}
 	switch opts.RerunStage {
 	case StageR1:
-		return RunStoryMap(ctx, llm, opts.Model, pipe, on)
+		return RunStoryMap(ctx, llm, opts.Model, pipe, opts.ExistingRoster, on)
 	case StageR2:
 		invalidateDownstreamFrom(pipe, StageR2, opts.OnlySceneIDs)
 		return RunBreakdowns(ctx, llm, opts.Model, pipe, opts.OnlySceneIDs, on)
@@ -466,7 +467,7 @@ func ShotsFromPipeline(pipe *ScriptPipeline) []map[string]any {
 					if c.Name == name {
 						castLooks = append(castLooks, map[string]any{
 							"character_id": c.CharacterID,
-							"look_id":      c.CharacterID + "_default",
+							"look_id":      defaultLookID(c.CharacterID, c.Looks),
 						})
 						break
 					}
@@ -477,13 +478,19 @@ func ShotsFromPipeline(pipe *ScriptPipeline) []map[string]any {
 		if pipe.EntityRegistry != nil {
 			for _, loc := range pipe.EntityRegistry.Locations {
 				if gp.LocationID != "" && loc.LocationID == gp.LocationID {
-					sceneLook = map[string]any{"scene_id": loc.LocationID, "look_id": loc.LocationID + "_default"}
+					sceneLook = map[string]any{
+						"scene_id": loc.LocationID,
+						"look_id":  defaultLookID(loc.LocationID, loc.Looks),
+					}
 					break
 				}
 			}
 			if len(sceneLook) == 0 && len(pipe.EntityRegistry.Locations) > 0 {
 				loc := pipe.EntityRegistry.Locations[0]
-				sceneLook = map[string]any{"scene_id": loc.LocationID, "look_id": loc.LocationID + "_default"}
+				sceneLook = map[string]any{
+					"scene_id": loc.LocationID,
+					"look_id":  defaultLookID(loc.LocationID, loc.Looks),
+				}
 			}
 		}
 		beatIdx := 0
@@ -522,8 +529,35 @@ func RosterFromPipeline(pipe *ScriptPipeline) (characters, scenes []map[string]a
 	if pipe.EntityRegistry == nil {
 		return nil, nil
 	}
+	locale := ""
+	if pipe != nil {
+		locale = pipe.Locale
+	}
+	defLabel := defaultLookLabel(locale)
 	for _, c := range pipe.EntityRegistry.Characters {
-		lookID := c.CharacterID + "_default"
+		looks := make([]any, 0, max(len(c.Looks), 1))
+		for _, lk := range c.Looks {
+			lookRow := map[string]any{
+				"id":       firstNonEmpty(lk.LookID, c.CharacterID+"_default"),
+				"label":    firstNonEmpty(lk.Label, defLabel),
+				"body":     composeCharacterLookBody(lk),
+				"decision": firstNonEmpty(lk.Decision, c.Decision),
+				"scope":    firstNonEmpty(lk.Scope, c.Scope),
+			}
+			if episodeOnlyFromScope(lk.Scope, lk.Decision) {
+				lookRow["episode_only"] = true
+			}
+			looks = append(looks, lookRow)
+		}
+		if len(looks) == 0 {
+			lookID := c.CharacterID + "_default"
+			lookRow := map[string]any{"id": lookID, "label": defLabel, "body": c.LookBody}
+			if episodeOnlyFromScope(c.Scope, c.Decision) {
+				lookRow["episode_only"] = true
+			}
+			looks = append(looks, lookRow)
+		}
+		defLook := defaultLookID(c.CharacterID, c.Looks)
 		row := map[string]any{
 			"id":                  c.CharacterID,
 			"name":                c.Name,
@@ -535,23 +569,52 @@ func RosterFromPipeline(pipe *ScriptPipeline) (characters, scenes []map[string]a
 			"visual_identity":     c.VisualIdentity,
 			"voice_manner":        c.VoiceManner,
 			"performance_notes":   c.PerformanceNotes,
-			"default_look_id":     lookID,
-			"looks": []any{
-				map[string]any{"id": lookID, "label": "默认", "body": c.LookBody},
-			},
+			"default_look_id":     defLook,
+			"looks":               looks,
+			"decision":            c.Decision,
+			"scope":               c.Scope,
+		}
+		if episodeOnlyFromScope(c.Scope, c.Decision) {
+			row["episode_only"] = true
 		}
 		characters = append(characters, row)
 	}
 	for _, loc := range pipe.EntityRegistry.Locations {
-		lookID := loc.LocationID + "_default"
-		scenes = append(scenes, map[string]any{
+		looks := make([]any, 0, max(len(loc.Looks), 1))
+		for _, lk := range loc.Looks {
+			lookRow := map[string]any{
+				"id":       firstNonEmpty(lk.LookID, loc.LocationID+"_default"),
+				"label":    firstNonEmpty(lk.Label, defLabel),
+				"body":     firstNonEmpty(lk.Body, loc.Body),
+				"decision": firstNonEmpty(lk.Decision, loc.Decision),
+				"scope":    firstNonEmpty(lk.Scope, loc.Scope),
+			}
+			if episodeOnlyFromScope(lk.Scope, lk.Decision) {
+				lookRow["episode_only"] = true
+			}
+			looks = append(looks, lookRow)
+		}
+		if len(looks) == 0 {
+			lookID := loc.LocationID + "_default"
+			lookRow := map[string]any{"id": lookID, "label": defLabel, "body": loc.Body}
+			if episodeOnlyFromScope(loc.Scope, loc.Decision) {
+				lookRow["episode_only"] = true
+			}
+			looks = append(looks, lookRow)
+		}
+		defLook := defaultLookID(loc.LocationID, loc.Looks)
+		row := map[string]any{
 			"id":              loc.LocationID,
 			"name":            loc.Name,
-			"default_look_id": lookID,
-			"looks": []any{
-				map[string]any{"id": lookID, "label": "default", "body": loc.Body},
-			},
-		})
+			"default_look_id": defLook,
+			"looks":           looks,
+			"decision":        loc.Decision,
+			"scope":           loc.Scope,
+		}
+		if episodeOnlyFromScope(loc.Scope, loc.Decision) {
+			row["episode_only"] = true
+		}
+		scenes = append(scenes, row)
 	}
 	return characters, scenes
 }

@@ -11,6 +11,8 @@ Aliases/pronouns may merge; when unsure keep separate entities.
 	"Title",
 	"Scene index (scene_id, heading, line range)",
 	"Numbered script (full text with line numbers)",
+	"Existing characters and looks (optional catalog; reuse ids when same)",
+	"Existing scenes / locations (optional catalog; reuse ids when same)",
 	"Output language block",
 ) + `
 
@@ -22,6 +24,9 @@ Aliases/pronouns may merge; when unsure keep separate entities.
   "core_conflict": "<central conflict>",
   "characters": [
     {
+      "decision":"reuse|create",
+      "existing_character_id":"<required when decision=reuse; must be from catalog>",
+      "scope":"series|episode",
       "name":"<full name>",
       "aliases":["<alias>"],
       "role":"protagonist|supporting|extra",
@@ -31,18 +36,41 @@ Aliases/pronouns may merge; when unsure keep separate entities.
       "visual_identity":"<face/build/permanent marks only; empty if unknown>",
       "voice_manner":"<observable speech manner; empty if unknown>",
       "performance_notes":"<optional acting note; empty if unknown>",
-      "look_body":"<Hair | Wardrobe | Accessories for default look only — no face baseline>"
+      "looks":[{
+        "decision":"reuse|create",
+        "existing_look_id":"<required when decision=reuse; must belong to that character>",
+        "scope":"series|episode",
+        "label":"<short look name; 默认/default if unclear>",
+        "hair":"<changeable hair; empty if unknown>",
+        "wardrobe":"<outfit; empty if unknown>",
+        "accessories":"<carried props; empty if unknown>"
+      }]
     }
   ],
-  "locations": [{"name":"<place>","body":"<environment>"}],
+  "locations": [{
+    "decision":"reuse|create",
+    "existing_location_id":"<required when decision=reuse; = catalog scene id>",
+    "scope":"series|episode",
+    "name":"<place>",
+    "looks":[{
+      "decision":"reuse|create",
+      "existing_look_id":"<required when decision=reuse>",
+      "scope":"series|episode",
+      "label":"<short; 默认/default if unclear>",
+      "body":"<environment / light / visible props; empty on reuse to keep catalog>"
+    }]
+  }],
   "hypotheses": ["<inference>"],
   "open_questions": ["<unconfirmed>"]
 }`, `- role: exactly one "protagonist"; others supporting|extra.
 - Empty string when script gives no evidence — never invent age, gender, face, or backstory.
-- visual_identity = stable face/body; look_body = changeable hair/wardrobe/props only.
-- Extra/bit parts may leave identity fields empty and only fill name + look_body.
+- visual_identity = stable face/body; looks = changeable hair/wardrobe/accessories only (no face baseline).
+- When Existing catalog is present: prefer decision=reuse with exact catalog ids for the same person/place/outfit; use create + scope=episode for new entities this episode only.
+- reuse: existing_*_id MUST appear in the catalog; visual_identity / look fields may be empty to keep catalog text.
+- create: invent no id; label unclear → 默认 (zh) or default (en). One default look is enough unless script clearly needs more.
+- Extra/bit parts may leave identity fields empty and only fill name + looks.
 - No empty personality tags ("气场强大", "cold", "charismatic").
-- locations: distinct places from scene index / script.`, `{
+- locations: distinct places from scene index / script; same reuse|create rules as characters.`, `{
   "genre": "都市悬疑",
   "logline": "暴雨夜，林夏发现门缝下的旧钥匙后接到陈屿的警告。",
   "mood": "压抑、警觉",
@@ -50,6 +78,9 @@ Aliases/pronouns may merge; when unsure keep separate entities.
   "core_conflict": "林夏是否相信陈屿并交出钥匙",
   "characters": [
     {
+      "decision": "create",
+      "existing_character_id": "",
+      "scope": "episode",
       "name": "林夏",
       "aliases": ["她"],
       "role": "protagonist",
@@ -59,9 +90,12 @@ Aliases/pronouns may merge; when unsure keep separate entities.
       "visual_identity": "短发，左眉细疤",
       "voice_manner": "压低声量",
       "performance_notes": "",
-      "look_body": "湿发贴额 | 灰色卫衣 | 无配饰"
+      "looks": [{"decision":"create","existing_look_id":"","scope":"episode","label":"默认","hair":"湿发贴额","wardrobe":"灰色卫衣","accessories":""}]
     },
     {
+      "decision": "create",
+      "existing_character_id": "",
+      "scope": "episode",
       "name": "陈屿",
       "aliases": [],
       "role": "supporting",
@@ -71,17 +105,24 @@ Aliases/pronouns may merge; when unsure keep separate entities.
       "visual_identity": "",
       "voice_manner": "急促",
       "performance_notes": "",
-      "look_body": "深色风衣领"
+      "looks": [{"decision":"create","existing_look_id":"","scope":"episode","label":"默认","hair":"","wardrobe":"深色风衣领","accessories":""}]
     }
   ],
-  "locations": [{"name": "林夏公寓门口", "body": "老式楼道，湿滑瓷砖，门缝渗光"}],
+  "locations": [{
+    "decision": "create",
+    "existing_location_id": "",
+    "scope": "episode",
+    "name": "林夏公寓门口",
+    "looks": [{"decision":"create","existing_look_id":"","scope":"episode","label":"默认","body":"老式楼道，湿滑瓷砖，门缝渗光"}]
+  }],
   "hypotheses": ["钥匙与陈屿提及的旧案有关"],
   "open_questions": ["陈屿如何得知钥匙位置"]
 }`) + `
 
 ## Rules
 - Characters: every named on-screen person.
-- Prefer hypotheses/open_questions over invented facts.`
+- Prefer hypotheses/open_questions over invented facts.
+- Never invent existing_*_id values; copy them from the Existing catalog only.`
 
 var BreakdownSystem = `# Role
 You are a 1st AD assistant extracting production facts for ONE scene.

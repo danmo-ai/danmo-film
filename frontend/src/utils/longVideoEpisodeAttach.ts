@@ -93,13 +93,39 @@ function softContainMatch(a: string, b: string): boolean {
  * Resolve parse character to project master or mark as new.
  * Match order: id → exact name → alias → soft containment (ambiguous if >1).
  */
+export type ParseBindFlags = {
+  episode_only?: boolean;
+  decision?: string;
+  scope?: string;
+};
+
 export function resolveCharacterLink(
-  incoming: Pick<LongVideoCharacter, 'id' | 'name' | 'aliases'>,
+  incoming: Pick<LongVideoCharacter, 'id' | 'name' | 'aliases'> & ParseBindFlags,
   seriesChars: LongVideoCharacter[],
   priorLinks?: CharacterLinkMap,
 ): CharacterLinkResult {
   const nameKey = normKey(incoming.name || '');
   const linkKey = nameKey || incoming.id || newStableId('chk_');
+
+  // LLM / export marked episode-only create — do not soft-match series names.
+  if (incoming.episode_only || incoming.decision === 'create' || incoming.scope === 'episode') {
+    const byId = seriesChars.find((c) => c.id === incoming.id);
+    if (byId && incoming.decision === 'reuse') {
+      return {
+        characterId: byId.id,
+        linkKey,
+        matched: true,
+        ambiguous: false,
+        seriesCharacter: byId,
+      };
+    }
+    return {
+      characterId: incoming.id || newStableId('cep_'),
+      linkKey,
+      matched: false,
+      ambiguous: false,
+    };
+  }
 
   if (priorLinks?.[linkKey]) {
     const id = priorLinks[linkKey];
@@ -193,12 +219,31 @@ export function resolveCharacterLink(
 }
 
 export function resolveSceneLink(
-  incoming: Pick<LongVideoScene, 'id' | 'name'>,
+  incoming: Pick<LongVideoScene, 'id' | 'name'> & ParseBindFlags,
   seriesScenes: LongVideoScene[],
   priorLinks?: SceneLinkMap,
 ): SceneLinkResult {
   const nameKey = normKey(incoming.name || '');
   const linkKey = nameKey || incoming.id || newStableId('ssk_');
+
+  if (incoming.episode_only || incoming.decision === 'create' || incoming.scope === 'episode') {
+    const byId = seriesScenes.find((s) => s.id === incoming.id);
+    if (byId && incoming.decision === 'reuse') {
+      return {
+        sceneId: byId.id,
+        linkKey,
+        matched: true,
+        ambiguous: false,
+        seriesScene: byId,
+      };
+    }
+    return {
+      sceneId: incoming.id || newStableId('sep_'),
+      linkKey,
+      matched: false,
+      ambiguous: false,
+    };
+  }
 
   if (priorLinks?.[linkKey]) {
     const id = priorLinks[linkKey];
@@ -402,8 +447,8 @@ function sceneLookToEpisodeVariant(
  * Does not mutate series state.
  */
 export function attachParseRosterToEpisode(opts: {
-  incomingCharacters: LongVideoCharacter[];
-  incomingScenes: LongVideoScene[];
+  incomingCharacters: Array<LongVideoCharacter & ParseBindFlags>;
+  incomingScenes: Array<LongVideoScene & ParseBindFlags>;
   seriesCharacters: LongVideoCharacter[];
   seriesScenes: LongVideoScene[];
   priorCharacterLinks?: CharacterLinkMap;
@@ -432,10 +477,47 @@ export function attachParseRosterToEpisode(opts: {
 
     if (link.matched && link.seriesCharacter) {
       reusedNames.push(link.seriesCharacter.name);
+      const bindVersion = link.seriesCharacter.library_version;
+      const seriesLookIds = new Set(link.seriesCharacter.looks.map((l) => l.id));
+      // Prefer LLM-bound look id when it already exists on the series master.
+      const preferredReuseLookId =
+        inc.default_look_id && seriesLookIds.has(inc.default_look_id) ? inc.default_look_id : '';
+      const episodeLookCreates = (inc.looks ?? []).filter((lk) => {
+        const flags = lk as LongVideoCharacterLook & ParseBindFlags;
+        if (flags.decision === 'reuse' || seriesLookIds.has(lk.id)) return false;
+        return Boolean(flags.episode_only || flags.decision === 'create' || !seriesLookIds.has(lk.id));
+      });
+
+      if (preferredReuseLookId || episodeLookCreates.length) {
+        const defaultLook =
+          preferredReuseLookId
+          || (episodeLookCreates.find((l) => l.id === inc.default_look_id)?.id)
+          || episodeLookCreates[0]?.id
+          || link.seriesCharacter.default_look_id;
+        characterDefaultLooks[link.characterId] = defaultLook;
+        const prev = characterVariants[link.characterId] ?? {
+          character_id: link.characterId,
+          scope: 'episode' as const,
+        };
+        const looks = [...(prev.looks ?? [])];
+        for (const lk of episodeLookCreates) {
+          if (!looks.some((x) => x.look_id === lk.id)) {
+            looks.push(lookToEpisodeVariant(lk, link.seriesCharacter.default_look_id));
+          }
+        }
+        characterVariants[link.characterId] = {
+          ...prev,
+          character_id: link.characterId,
+          base_version: bindVersion,
+          default_look_id: defaultLook,
+          looks: looks.length ? looks : prev.looks,
+        };
+        continue;
+      }
+
       const cue = wardrobeCueFromIncoming(inc);
       const sel = selectCharacterLookByRules(link.seriesCharacter, cue);
       characterDefaultLooks[link.characterId] = sel.lookId || link.seriesCharacter.default_look_id;
-      const bindVersion = link.seriesCharacter.library_version;
 
       if (sel.createdStub && sel.episodeLookStub) {
         const prev = characterVariants[link.characterId] ?? {
@@ -505,10 +587,46 @@ export function attachParseRosterToEpisode(opts: {
     if (normKey(inc.name)) sceneLinks[normKey(inc.name)] = link.sceneId;
 
     if (link.matched && link.seriesScene) {
+      const bindVersion = link.seriesScene.library_version;
+      const seriesLookIds = new Set(link.seriesScene.looks.map((l) => l.id));
+      const preferredReuseLookId =
+        inc.default_look_id && seriesLookIds.has(inc.default_look_id) ? inc.default_look_id : '';
+      const episodeLookCreates = (inc.looks ?? []).filter((lk) => {
+        const flags = lk as LongVideoSceneLook & ParseBindFlags;
+        if (flags.decision === 'reuse' || seriesLookIds.has(lk.id)) return false;
+        return Boolean(flags.episode_only || flags.decision === 'create' || !seriesLookIds.has(lk.id));
+      });
+
+      if (preferredReuseLookId || episodeLookCreates.length) {
+        const defaultLook =
+          preferredReuseLookId
+          || (episodeLookCreates.find((l) => l.id === inc.default_look_id)?.id)
+          || episodeLookCreates[0]?.id
+          || link.seriesScene.default_look_id;
+        sceneDefaultLooks[link.sceneId] = defaultLook;
+        const prev = sceneVariants[link.sceneId] ?? {
+          scene_id: link.sceneId,
+          scope: 'episode' as const,
+        };
+        const looks = [...(prev.looks ?? [])];
+        for (const lk of episodeLookCreates) {
+          if (!looks.some((x) => x.look_id === lk.id)) {
+            looks.push(sceneLookToEpisodeVariant(lk, link.seriesScene.default_look_id));
+          }
+        }
+        sceneVariants[link.sceneId] = {
+          ...prev,
+          scene_id: link.sceneId,
+          base_version: bindVersion,
+          default_look_id: defaultLook,
+          looks: looks.length ? looks : prev.looks,
+        };
+        continue;
+      }
+
       const cue = sceneCueFromIncoming(inc);
       const sel = selectSceneLookByRules(link.seriesScene, cue);
       sceneDefaultLooks[link.sceneId] = sel.lookId || link.seriesScene.default_look_id;
-      const bindVersion = link.seriesScene.library_version;
 
       if (sel.createdStub && sel.episodeLookStub) {
         const prev = sceneVariants[link.sceneId] ?? {

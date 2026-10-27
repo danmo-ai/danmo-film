@@ -10,42 +10,70 @@ type Health struct {
 }
 
 type Model struct {
-	ID         string         `json:"id"`
-	Media      string         `json:"media,omitempty"`
-	Label      string         `json:"label,omitempty"`
-	Modes      []string       `json:"modes,omitempty"` // t2v, i2v, flf, t2i
-	MaxSec     float64        `json:"max_duration_sec,omitempty"`
-	Sizes      []string       `json:"sizes,omitempty"`
-	Extra      map[string]any `json:"extra,omitempty"`
+	ID     string         `json:"id"`
+	Media  string         `json:"media,omitempty"`
+	Label  string         `json:"label,omitempty"`
+	Modes  []string       `json:"modes,omitempty"` // t2v, i2v, flf, r2v, v2v
+	MaxSec float64        `json:"max_duration_sec,omitempty"`
+	Sizes  []string       `json:"sizes,omitempty"`
+	Extra  map[string]any `json:"extra,omitempty"`
 }
+
+// ImageMode is Film's canonical image-generation task kind (parallel to VideoMode).
+type ImageMode string
+
+const (
+	ImageModeT2I     ImageMode = "t2i"     // text-to-image
+	ImageModeI2I     ImageMode = "i2i"     // reference / img2img
+	ImageModeEdit    ImageMode = "edit"    // instruction edit on a source image
+	ImageModeInpaint ImageMode = "inpaint" // masked local redraw
+)
 
 type ImageRequest struct {
-	Model    string
-	Prompt   string
-	Size     string
-	Raw      map[string]any
-	SourceID string
+	Model            string
+	Prompt           string
+	NegativePrompt   string
+	Mode             ImageMode
+	Size             string
+	Seed             int
+	SourceID         string   // primary image for edit / inpaint / single-ref i2i
+	MaskID           string   // inpaint
+	ReferenceImages  []string // i2i multi-ref
+	Raw              map[string]any
 }
 
+// VideoMode is Film's canonical video-generation task kind.
+// One CreateVideo entry; mode selects which media slots are legal.
+// Do not merge r2v into t2v — reference images are a distinct exclusive group
+// from first/last frames (Wan 3 / Seedance mutual exclusion).
 type VideoMode string
 
 const (
-	VideoModeT2V VideoMode = "t2v"
-	VideoModeI2V VideoMode = "i2v"
-	VideoModeFLF VideoMode = "flf"
+	VideoModeT2V VideoMode = "t2v" // text only
+	VideoModeI2V VideoMode = "i2v" // lock first frame
+	VideoModeFLF VideoMode = "flf" // first + last frame
+	VideoModeR2V VideoMode = "r2v" // reference images (+ optional ref videos in same exclusive group)
+	VideoModeV2V VideoMode = "v2v" // reference / continuation video
 )
 
 type VideoRequest struct {
-	Model      string
-	Prompt     string
-	Mode       VideoMode
-	DurationSec float64
-	Size       string
-	FPS        float64
-	NumFrames  int
-	FirstFrame string // provider-native staged id, URL, or data URI
-	LastFrame  string
-	Raw        map[string]any
+	Model             string
+	Prompt            string
+	NegativePrompt    string
+	Mode              VideoMode
+	DurationSec       float64
+	Size              string
+	Resolution        string
+	Ratio             string
+	FPS               float64
+	NumFrames         int
+	Seed              int
+	FirstFrame        string   // staged id / URL / data URI
+	LastFrame         string
+	ReferenceImages   []string // r2v (and multimodal reference alongside v2v on some vendors)
+	ReferenceVideos   []string // v2v / multimodal reference
+	SourceVideo       string   // primary clip for continuation (alias of first reference video)
+	Raw               map[string]any
 }
 
 type Task struct {
@@ -71,6 +99,8 @@ type SSEEvent struct {
 }
 
 // GenerationProvider is Film's canonical image/video job API.
+// Video: prefer CreateVideo with explicit body.mode (t2v|i2v|flf|r2v|v2v).
+// EditVideo remains for true edit ops / backward compat and must honor the same mode field.
 type GenerationProvider interface {
 	ID() string
 	Health(ctx context.Context) (map[string]any, error)

@@ -17,15 +17,17 @@ import (
 	"github.com/danmo-ai/danmo-film/core/port"
 )
 
-// MiniMax Hailuo official video_generation API.
+// MiniMaxProvider — Hailuo / H3 video + image.
+// Video: only MiniMax-H3 and later via POST /v2/video_generation (content[]).
 type MiniMaxProvider struct {
 	base   string
 	apiKey string
 	model  string
 	client *http.Client
 	mu     sync.Mutex
-	files  map[string]string // file_id or task -> retrieve url
+	files  map[string]string // task/file id -> download url
 	staged map[string]stagedFile
+	h3Task map[string]bool // task ids created on v2/H3 API
 }
 
 func NewMiniMax(base, apiKey, model string) *MiniMaxProvider {
@@ -33,7 +35,7 @@ func NewMiniMax(base, apiKey, model string) *MiniMaxProvider {
 		base = "https://api.minimax.chat"
 	}
 	if model == "" {
-		model = "MiniMax-Hailuo-02"
+		model = "MiniMax-H3"
 	}
 	return &MiniMaxProvider{
 		base:   strings.TrimRight(base, "/"),
@@ -42,6 +44,7 @@ func NewMiniMax(base, apiKey, model string) *MiniMaxProvider {
 		client: &http.Client{Timeout: 120 * time.Second},
 		files:  map[string]string{},
 		staged: map[string]stagedFile{},
+		h3Task: map[string]bool{},
 	}
 }
 
@@ -51,7 +54,7 @@ func (p *MiniMaxProvider) Health(_ context.Context) (map[string]any, error) {
 	if p.apiKey == "" {
 		return map[string]any{"ok": false, "configured": false, "error": "missing MiniMax API key"}, nil
 	}
-	return map[string]any{"ok": true, "configured": true, "vendor": "minimax-hailuo"}, nil
+	return map[string]any{"ok": true, "configured": true, "vendor": "minimax-h3"}, nil
 }
 
 func (p *MiniMaxProvider) ListModels(ctx context.Context, media string) ([]map[string]any, error) {
@@ -69,6 +72,7 @@ func (p *MiniMaxProvider) ListModels(ctx context.Context, media string) ([]map[s
 	if len(items) == 0 {
 		return nil, fmt.Errorf("minimax /v1/models returned no models")
 	}
+	// Capabilities come from providers.video_model_params / image_model_params via Router registry merge.
 	return ensureConfiguredModel(items, p.model, media, p.model), nil
 }
 
@@ -85,9 +89,20 @@ func (p *MiniMaxProvider) StageInput(ctx context.Context, path, mime string) (ma
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("minimax API key not configured")
 	}
-	f, err := os.Open(path)
+	// Keep a local stage entry so H3 content[] can use data URIs (preferred over file_id).
+	uri, err := fileDataURI(path, mime)
 	if err != nil {
 		return nil, err
+	}
+	id := "stg_" + filepathBase(path)
+	p.mu.Lock()
+	p.staged[id] = stagedFile{Path: path, MIME: mime, URI: uri}
+	p.mu.Unlock()
+
+	// Also try vendor upload for callers that still expect a file_id.
+	f, err := os.Open(path)
+	if err != nil {
+		return map[string]any{"id": id}, nil
 	}
 	defer f.Close()
 	var buf bytes.Buffer
@@ -95,42 +110,78 @@ func (p *MiniMaxProvider) StageInput(ctx context.Context, path, mime string) (ma
 	_ = w.WriteField("purpose", "prompt")
 	fw, err := w.CreateFormFile("file", filepath.Base(path))
 	if err != nil {
-		return nil, err
+		return map[string]any{"id": id}, nil
 	}
 	if _, err := io.Copy(fw, f); err != nil {
-		return nil, err
+		return map[string]any{"id": id}, nil
 	}
 	_ = w.Close()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.base+"/v1/files/upload", &buf)
 	if err != nil {
-		return nil, err
+		return map[string]any{"id": id}, nil
 	}
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	m, err := p.do(req)
 	if err != nil {
-		return nil, fmt.Errorf("minimax file upload: %w", err)
+		return map[string]any{"id": id}, nil
 	}
-	id := first(strVal(m["file_id"]), nestedOrFlatID(m))
-	if file, ok := m["file"].(map[string]any); ok && id == "" {
-		id = strVal(file["file_id"])
+	fid := first(strVal(m["file_id"]), nestedOrFlatID(m))
+	if file, ok := m["file"].(map[string]any); ok && fid == "" {
+		fid = strVal(file["file_id"])
 	}
+	if fid != "" {
+		p.mu.Lock()
+		p.staged[fid] = stagedFile{Path: path, MIME: mime, URI: uri}
+		p.mu.Unlock()
+		return map[string]any{"id": fid}, nil
+	}
+	return map[string]any{"id": id}, nil
+}
+
+func (p *MiniMaxProvider) resolveMediaURL(id string) string {
+	id = strings.TrimSpace(id)
 	if id == "" {
-		return nil, fmt.Errorf("minimax upload returned no file_id")
+		return ""
+	}
+	if strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://") || strings.HasPrefix(id, "data:") {
+		return id
 	}
 	p.mu.Lock()
-	p.staged[id] = stagedFile{Path: path, MIME: mime}
+	s, ok := p.staged[id]
 	p.mu.Unlock()
-	return map[string]any{"id": id}, nil
+	if ok {
+		if s.URI != "" {
+			return s.URI
+		}
+		if s.Path != "" {
+			if uri, err := fileDataURI(s.Path, s.MIME); err == nil {
+				return uri
+			}
+		}
+	}
+	return id
 }
 
 func (p *MiniMaxProvider) CreateImage(ctx context.Context, body map[string]any) (map[string]any, error) {
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("minimax API key not configured")
 	}
+	req, err := ParseImageRequest(body)
+	if err != nil {
+		return nil, err
+	}
+	model := first(req.Model, "image-01")
+	// MiniMax image-01 family: t2i only for now.
+	if req.Mode != port.ImageModeT2I {
+		return nil, fmt.Errorf("minimax image model %s does not support mode %s (only t2i)", model, req.Mode)
+	}
 	payload := map[string]any{
-		"model":  first(strVal(body["model"]), "image-01"),
-		"prompt": strVal(body["prompt"]),
+		"model":  model,
+		"prompt": req.Prompt,
+	}
+	if req.Size != "" {
+		payload["size"] = req.Size
 	}
 	m, err := p.postJSON(ctx, "/v1/image_generation", payload)
 	if err != nil {
@@ -151,33 +202,39 @@ func (p *MiniMaxProvider) CreateImage(ctx context.Context, body map[string]any) 
 }
 
 func (p *MiniMaxProvider) CreateVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
-	return p.submitVideo(ctx, body, false)
+	return p.submitVideo(ctx, body)
 }
 
 func (p *MiniMaxProvider) EditVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
-	return p.submitVideo(ctx, body, true)
+	return p.submitVideo(ctx, body)
 }
 
-func (p *MiniMaxProvider) submitVideo(ctx context.Context, body map[string]any, isEdit bool) (map[string]any, error) {
+func (p *MiniMaxProvider) submitVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("minimax API key not configured")
 	}
-	payload := map[string]any{
-		"model":  first(strVal(body["model"]), p.model),
-		"prompt": strVal(body["prompt"]),
+	req, err := ParseVideoRequest(body)
+	if err != nil {
+		return nil, err
 	}
-	firstFrame := first(strVal(body["source_asset_id"]), strVal(body["start_asset_id"]))
-	lastFrame := first(strVal(body["tail_asset_id"]), strVal(body["end_asset_id"]))
-	if isEdit && firstFrame == "" {
-		return nil, fmt.Errorf("minimax i2v requires source_asset_id")
+	model := first(req.Model, p.model)
+	protocol := filmProtocolFromBody(body)
+	if protocol == "" {
+		return nil, fmt.Errorf("minimax video model %q missing film_protocol (set providers.video_model_params)", model)
 	}
-	if firstFrame != "" {
-		payload["first_frame_image"] = firstFrame
+	if protocol != "minimax_h3_content" {
+		return nil, fmt.Errorf("minimax adapter only supports protocol minimax_h3_content (got %q for %s)", protocol, model)
 	}
-	if lastFrame != "" {
-		payload["last_frame_image"] = lastFrame
+	if modes, ok := body["film_modes"].([]string); ok && len(modes) > 0 {
+		if err := AssertVideoModeSupported(map[string]any{"modes": modes}, req.Mode); err != nil {
+			return nil, err
+		}
 	}
-	m, err := p.postJSON(ctx, "/v1/video_generation", payload)
+	payload, err := buildMiniMaxH3VideoPayload(model, req, p.resolveMediaURL)
+	if err != nil {
+		return nil, err
+	}
+	m, err := p.postJSON(ctx, "/v2/video_generation", payload)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +242,84 @@ func (p *MiniMaxProvider) submitVideo(ctx context.Context, body map[string]any, 
 	if id == "" {
 		return nil, fmt.Errorf("minimax video task_id missing")
 	}
+	p.mu.Lock()
+	p.h3Task[id] = true
+	p.mu.Unlock()
 	return taskEnvelope(id, "queued", "video", nil), nil
+}
+
+func buildMiniMaxH3VideoPayload(model string, req port.VideoRequest, resolve func(string) string) (map[string]any, error) {
+	content := make([]map[string]any, 0, 8)
+	if req.Prompt != "" {
+		content = append(content, map[string]any{"type": "text", "text": req.Prompt})
+	}
+	switch req.Mode {
+	case port.VideoModeT2V:
+		// text only
+	case port.VideoModeI2V:
+		u := resolve(req.FirstFrame)
+		if u == "" {
+			return nil, fmt.Errorf("minimax i2v requires first_frame url")
+		}
+		content = append(content, map[string]any{
+			"type": "image_url", "image_url": map[string]any{"url": u}, "role": "first_frame",
+		})
+	case port.VideoModeFLF:
+		fu, lu := resolve(req.FirstFrame), resolve(req.LastFrame)
+		content = append(content,
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": fu}, "role": "first_frame"},
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": lu}, "role": "last_frame"},
+		)
+	case port.VideoModeR2V:
+		for _, id := range filterNonEmptyURLs(req.ReferenceImages) {
+			content = append(content, map[string]any{
+				"type": "image_url", "image_url": map[string]any{"url": resolve(id)}, "role": "reference_image",
+			})
+		}
+		for _, id := range filterNonEmptyURLs(req.ReferenceVideos) {
+			content = append(content, map[string]any{
+				"type": "video_url", "video_url": map[string]any{"url": resolve(id)}, "role": "reference_video",
+			})
+		}
+		if len(content) < 2 { // text + at least one ref
+			return nil, fmt.Errorf("minimax r2v requires reference images/videos")
+		}
+	case port.VideoModeV2V:
+		nVid := 0
+		for _, id := range filterNonEmptyURLs(req.ReferenceVideos) {
+			content = append(content, map[string]any{
+				"type": "video_url", "video_url": map[string]any{"url": resolve(id)}, "role": "reference_video",
+			})
+			nVid++
+		}
+		for _, id := range filterNonEmptyURLs(req.ReferenceImages) {
+			content = append(content, map[string]any{
+				"type": "image_url", "image_url": map[string]any{"url": resolve(id)}, "role": "reference_image",
+			})
+		}
+		if nVid == 0 {
+			return nil, fmt.Errorf("minimax v2v requires reference video")
+		}
+	default:
+		return nil, fmt.Errorf("minimax unsupported video mode %q", req.Mode)
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("minimax video content empty")
+	}
+	payload := map[string]any{
+		"model":   model,
+		"content": content,
+	}
+	if req.DurationSec > 0 {
+		payload["duration"] = int(req.DurationSec)
+	}
+	if res := first(req.Resolution, dashVideoResolution(req.Size)); res != "" {
+		payload["resolution"] = res
+	}
+	if req.Ratio != "" {
+		payload["ratio"] = req.Ratio
+	}
+	return payload, nil
 }
 
 func (p *MiniMaxProvider) GetTask(ctx context.Context, taskID string) (map[string]any, error) {
@@ -194,7 +328,16 @@ func (p *MiniMaxProvider) GetTask(ctx context.Context, taskID string) (map[strin
 		p.mu.Unlock()
 		return taskEnvelope(taskID, "completed", "image", map[string]any{"asset_ids": []string{u}}), nil
 	}
+	isH3 := p.h3Task[taskID]
 	p.mu.Unlock()
+
+	if isH3 {
+		return p.getH3Task(ctx, taskID)
+	}
+	// Try H3 query first (in case process restarted); fall back to v1.
+	if out, err := p.getH3Task(ctx, taskID); err == nil {
+		return out, nil
+	}
 	m, err := p.getJSON(ctx, "/v1/query/video_generation?task_id="+taskID)
 	if err != nil {
 		return nil, err
@@ -214,10 +357,69 @@ func (p *MiniMaxProvider) GetTask(ctx context.Context, taskID string) (map[strin
 	return out, nil
 }
 
+func (p *MiniMaxProvider) getH3Task(ctx context.Context, taskID string) (map[string]any, error) {
+	m, err := p.getJSON(ctx, "/v2/query/video_generation/"+taskID)
+	if err != nil {
+		return nil, err
+	}
+	task, _ := m["task"].(map[string]any)
+	if task == nil {
+		task = m
+	}
+	status := mapMiniMaxH3Status(strVal(task["status"]))
+	out := taskEnvelope(taskID, status, "video", nil)
+	if status == "completed" {
+		url := ""
+		if content, ok := task["content"].(map[string]any); ok {
+			url = strVal(content["url"])
+		}
+		if url == "" {
+			url = strVal(task["download_url"])
+		}
+		if url == "" {
+			return nil, fmt.Errorf("minimax H3 completed task missing content.url")
+		}
+		p.mu.Lock()
+		p.files[taskID] = url
+		p.h3Task[taskID] = true
+		p.mu.Unlock()
+		out["asset_ids"] = []string{url}
+	}
+	if status == "failed" {
+		if errObj, ok := task["error"].(map[string]any); ok {
+			out["error"] = first(strVal(errObj["message"]), strVal(errObj["code"]), fmt.Sprint(errObj))
+		} else if e := strVal(task["error"]); e != "" {
+			out["error"] = e
+		}
+	}
+	return out, nil
+}
+
+func mapMiniMaxH3Status(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "succeeded", "success", "completed":
+		return "completed"
+	case "failed", "cancelled", "canceled", "error":
+		return "failed"
+	case "queueing", "queued", "pending":
+		return "queued"
+	case "preparing", "processing", "running":
+		return "running"
+	default:
+		return mapArkStatus(s)
+	}
+}
+
 func (p *MiniMaxProvider) DownloadResult(ctx context.Context, providerRef, dest string) error {
 	if strings.HasPrefix(providerRef, "http") {
 		return downloadURL(p.client, providerRef, dest, map[string]string{"Authorization": "Bearer " + p.apiKey})
 	}
+	p.mu.Lock()
+	if u := p.files[providerRef]; strings.HasPrefix(u, "http") {
+		p.mu.Unlock()
+		return downloadURL(p.client, u, dest, nil)
+	}
+	p.mu.Unlock()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.base+"/v1/files/retrieve?file_id="+providerRef, nil)
 	if err != nil {
 		return err

@@ -40,6 +40,8 @@ func (a *App) getSettings(c *gin.Context) {
 	defTopP := config.DefaultLLMTopP(a.Settings)
 	defThink := config.DefaultLLMThinkingMode(a.Settings)
 	modelParams := config.ModelParamsToAny(config.LLMModelParamsMap(a.Settings))
+	videoModelParams := config.VideoModelParamsToAny(config.VideoModelParamsMap(a.Settings))
+	imageModelParams := config.ImageModelParamsToAny(config.ImageModelParamsMap(a.Settings))
 	a.mu.RUnlock()
 	providers := s.Map("providers")
 	providers["llm_profiles"] = config.ProfilesToAny(maskProfiles(profiles))
@@ -50,6 +52,8 @@ func (a *App) getSettings(c *gin.Context) {
 	providers["llm_default_top_p"] = defTopP
 	providers["llm_default_thinking_mode"] = defThink
 	providers["llm_model_params"] = modelParams
+	providers["video_model_params"] = videoModelParams
+	providers["image_model_params"] = imageModelParams
 	providers["generation_profiles"] = config.GenProfilesToAny(maskGenProfiles(genProfiles))
 	providers["generation_default_model"] = genDefault
 	providers["image_profiles"] = config.ImageProfilesToAny(maskGenProfiles(imgProfiles))

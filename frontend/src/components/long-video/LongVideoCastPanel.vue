@@ -352,6 +352,95 @@
           </div>
         </section>
 
+        <section class="lv-cast-workshop__identity-sheet" :aria-label="$tt('video.longVideoCastIdentitySheetSection')">
+          <div class="lv-cast-workshop__looks-head">
+            <h3 class="lv-cast-workshop__looks-title">{{ $tt('video.longVideoCastIdentitySheetSection') }}</h3>
+            <p class="lv-cast-workshop__looks-hint">{{ $tt('video.longVideoCastIdentitySheetHint') }}</p>
+          </div>
+          <div class="lv-cast-workshop__identity-views">
+            <article
+              v-for="angle in identityAngles"
+              :key="angle"
+              class="lv-cast-workshop__identity-card"
+              :class="{
+                'is-ready': Boolean(identityAssetId(selectedCharacter, angle)),
+                'is-master': angle === 'front',
+              }"
+            >
+              <div
+                class="lv-cast-workshop__look-portrait"
+                :class="{
+                  'is-empty': !identityAssetId(selectedCharacter, angle),
+                  'is-loading': portraitGeneratingKey === identityKey(selectedIndex, angle),
+                }"
+              >
+                <img
+                  v-if="identityAssetId(selectedCharacter, angle)"
+                  :src="portraitUrl(identityAssetId(selectedCharacter, angle)!)"
+                  alt=""
+                />
+                <div v-else class="lv-cast-workshop__look-portrait-empty">
+                  <DqIcon :size="22"><PictureFilled /></DqIcon>
+                  <span>{{ identityAngleLabel(angle) }}</span>
+                </div>
+                <div class="lv-cast-workshop__look-badges">
+                  <span
+                    class="lv-cast-workshop__look-badge"
+                    :class="identityAssetId(selectedCharacter, angle) ? 'is-ready' : 'is-pending'"
+                  >
+                    {{
+                      angle === 'front'
+                        ? $tt('video.longVideoCastIdentityMaster')
+                        : identityAngleLabel(angle)
+                    }}
+                  </span>
+                </div>
+                <div
+                  v-if="portraitGeneratingKey === identityKey(selectedIndex, angle)"
+                  class="lv-cast-workshop__look-loading"
+                  aria-live="polite"
+                >
+                  <DqIcon :size="20"><Loading /></DqIcon>
+                </div>
+              </div>
+              <footer class="lv-cast-workshop__look-foot">
+                <DqButton
+                  v-if="!identityLocked && !identityReadOnly"
+                  size="sm"
+                  type="primary"
+                  :loading="portraitGeneratingKey === identityKey(selectedIndex, angle)"
+                  :disabled="batchGenerating || portraitGeneratingKey != null || (angle !== 'front' && !identityAssetId(selectedCharacter, 'front'))"
+                  @click="emit('generate-identity-angle', selectedIndex, angle)"
+                >
+                  {{
+                    angle === 'front'
+                      ? $tt('video.longVideoCastIdentityGenerateFront')
+                      : $tt('video.longVideoCastIdentityGenerateFromFront')
+                  }}
+                </DqButton>
+                <DqButton
+                  v-if="!identityLocked && !identityReadOnly && !identityAssetId(selectedCharacter, angle)"
+                  size="sm"
+                  type="default"
+                  :disabled="batchGenerating || portraitGeneratingKey != null"
+                  @click="emit('pick-identity-gallery', selectedIndex, angle)"
+                >
+                  {{ $tt('video.longVideoCastPortraitImport') }}
+                </DqButton>
+                <DqButton
+                  v-if="!identityLocked && !identityReadOnly && identityAssetId(selectedCharacter, angle)"
+                  size="sm"
+                  type="text"
+                  :disabled="batchGenerating || portraitGeneratingKey != null"
+                  @click="emit('clear-identity-view', selectedIndex, angle)"
+                >
+                  {{ $tt('video.longVideoClearShort') }}
+                </DqButton>
+              </footer>
+            </article>
+          </div>
+        </section>
+
         <div class="lv-cast-workshop__looks-head">
           <h3 class="lv-cast-workshop__looks-title">{{ $tt('video.longVideoCastLooksSection') }}</h3>
           <p class="lv-cast-workshop__looks-hint">{{ $tt('video.longVideoCastLooksSectionHint') }}</p>
@@ -362,23 +451,23 @@
             v-for="(lk, li) in selectedCharacter.looks"
             :key="lk.id"
             class="lv-cast-workshop__look-card"
-            :class="{ 'lv-cast-workshop__look-card--ready': Boolean(lk.reference_asset_id) }"
+            :class="{ 'lv-cast-workshop__look-card--ready': Boolean(wardrobeRefId(lk)) }"
           >
             <div
               class="lv-cast-workshop__look-portrait"
-              :class="{ 'is-empty': !lk.reference_asset_id, 'is-loading': portraitGeneratingKey === portraitKey(selectedIndex, li) }"
+              :class="{ 'is-empty': !wardrobeRefId(lk), 'is-loading': portraitGeneratingKey === portraitKey(selectedIndex, li) }"
             >
-              <img v-if="lk.reference_asset_id" :src="portraitUrl(lk.reference_asset_id)" alt="" />
+              <img v-if="wardrobeRefId(lk)" :src="portraitUrl(wardrobeRefId(lk)!)" alt="" />
               <div v-else class="lv-cast-workshop__look-portrait-empty">
                 <DqIcon :size="22"><PictureFilled /></DqIcon>
-                <span>{{ $tt('video.longVideoCastPortraitMissing') }}</span>
+                <span>{{ $tt('video.longVideoCastWardrobeMissing') }}</span>
               </div>
               <div class="lv-cast-workshop__look-badges">
                 <span
                   class="lv-cast-workshop__look-badge"
-                  :class="lk.reference_asset_id ? 'is-ready' : 'is-pending'"
+                  :class="wardrobeRefId(lk) ? 'is-ready' : 'is-pending'"
                 >
-                  {{ lk.reference_asset_id ? $tt('video.longVideoCastPortraitReady') : $tt('video.longVideoCastPortraitMissing') }}
+                  {{ wardrobeRefId(lk) ? $tt('video.longVideoCastWardrobeReady') : $tt('video.longVideoCastWardrobeMissing') }}
                 </span>
                 <span v-if="lk.lora_id" class="lv-cast-workshop__look-badge is-lora" :title="loraLabel(lk.lora_id)">
                   {{ loraLabel(lk.lora_id) }}
@@ -392,7 +481,7 @@
                 <DqIcon :size="20"><Loading /></DqIcon>
               </div>
               <div
-                v-if="lk.reference_asset_id && !isLookLocked(lk)"
+                v-if="wardrobeRefId(lk) && !isLookLocked(lk)"
                 class="lv-cast-workshop__look-portrait-overlay"
               >
                 <button
@@ -439,7 +528,7 @@
                   @update:model-value="onLookBody(selectedIndex, li, $event)"
                 />
               </label>
-              <label v-if="lk.reference_asset_id || lk.vision_description" class="lv-cast-workshop__field">
+              <label v-if="wardrobeRefId(lk) || lk.vision_description" class="lv-cast-workshop__field">
                 <span class="lv-cast-workshop__field-label">{{ $tt('video.longVideoCastVisionDescriptionPh') }}</span>
                 <DqInput
                   :model-value="lk.vision_description || ''"
@@ -493,10 +582,10 @@
                 :disabled="batchGenerating || portraitGeneratingKey != null"
                 @click="emit('generate-portrait', selectedIndex, li)"
               >
-                {{ $tt('video.longVideoCastPortraitGenerate') }}
+                {{ $tt('video.longVideoCastWardrobeGenerate') }}
               </DqButton>
               <DqButton
-                v-if="!isLookLocked(lk) && !lk.reference_asset_id"
+                v-if="!isLookLocked(lk) && !wardrobeRefId(lk)"
                 size="sm"
                 type="default"
                 :disabled="batchGenerating || portraitGeneratingKey != null"
@@ -505,7 +594,7 @@
                 {{ $tt('video.longVideoCastPortraitImport') }}
               </DqButton>
               <DqButton
-                v-if="!isLookLocked(lk) && lk.reference_asset_id"
+                v-if="!isLookLocked(lk) && wardrobeRefId(lk)"
                 size="sm"
                 type="text"
                 :loading="visionBackfillKey === portraitKey(selectedIndex, li)"
@@ -563,6 +652,7 @@ import { Close, Delete, Loading, PictureFilled, Plus } from '@danqing/dq-shell';
 import LongVideoEntityRelatedTasks from './LongVideoEntityRelatedTasks.vue';
 import { api } from '@/utils/api';
 import type {
+  CharacterIdentityAngle,
   LibraryEntityVersion,
   LongVideoCastRole,
   LongVideoCharacter,
@@ -574,9 +664,12 @@ import {
   libraryVersionStatus,
 } from '@/utils/longVideoLibrary';
 import {
+  CHARACTER_IDENTITY_ANGLES,
   characterVisualIdentity,
   createCharacterEntry,
   createLookEntry,
+  identityViewAssetId,
+  lookWardrobeRefId,
   looksMissingPortrait,
   parseCharacterRosterFromAnchor,
 } from '@/utils/longVideoProject';
@@ -616,6 +709,10 @@ const emit = defineEmits<{
   (e: 'finalize-asset', characterId: string): void;
   (e: 'finalize-look', characterId: string, lookId: string): void;
   (e: 'fork-draft', characterId: string): void;
+  (e: 'generate-identity-front', characterIndex: number): void;
+  (e: 'generate-identity-angle', characterIndex: number, angle: CharacterIdentityAngle): void;
+  (e: 'pick-identity-gallery', characterIndex: number, angle: CharacterIdentityAngle): void;
+  (e: 'clear-identity-view', characterIndex: number, angle: CharacterIdentityAngle): void;
   (e: 'generate-portrait', characterIndex: number, lookIndex: number): void;
   (e: 'pick-portrait-gallery', characterIndex: number, lookIndex: number): void;
   (e: 'clear-portrait', characterIndex: number, lookIndex: number): void;
@@ -640,16 +737,40 @@ const { t: $tt, locale } = useI18n();
 const selectedIndex = ref(0);
 
 const compatibleLoras = computed(() => props.compatibleLoras ?? []);
+const identityAngles = CHARACTER_IDENTITY_ANGLES;
 const missingPortraitCount = computed(() => looksMissingPortrait(props.characters).length);
 const totalLookCount = computed(() =>
   props.characters.reduce((sum, ch) => sum + ch.looks.length, 0),
 );
 const readyPortraitCount = computed(() =>
   props.characters.reduce(
-    (sum, ch) => sum + ch.looks.filter((lk) => Boolean(lk.reference_asset_id)).length,
+    (sum, ch) => sum + ch.looks.filter((lk) => Boolean(lookWardrobeRefId(lk))).length,
     0,
   ),
 );
+
+function wardrobeRefId(lk: LongVideoCharacterLook): string | undefined {
+  return lookWardrobeRefId(lk);
+}
+
+function identityAssetId(ch: LongVideoCharacter, angle: CharacterIdentityAngle): string | undefined {
+  return identityViewAssetId(ch, angle);
+}
+
+function identityKey(ci: number, angle: CharacterIdentityAngle): string {
+  return `id-${ci}-${angle}`;
+}
+
+function identityAngleLabel(angle: CharacterIdentityAngle): string {
+  const key = {
+    front: 'video.longVideoCastIdentityAngleFront',
+    three_quarter: 'video.longVideoCastIdentityAngleThreeQuarter',
+    profile: 'video.longVideoCastIdentityAngleProfile',
+    back: 'video.longVideoCastIdentityAngleBack',
+    full_body: 'video.longVideoCastIdentityAngleFullBody',
+  }[angle];
+  return $tt(key);
+}
 
 const selectedCharacter = computed(() => props.characters[selectedIndex.value] ?? null);
 
@@ -810,13 +931,13 @@ function characterInitial(name: string): string {
 
 function primaryPortraitAsset(ch: LongVideoCharacter): string | undefined {
   for (const lk of ch.looks) {
-    if (lk.reference_asset_id) return lk.reference_asset_id;
+    if (lookWardrobeRefId(lk)) return lookWardrobeRefId(lk);
   }
   return undefined;
 }
 
 function portraitCountForCharacter(ch: LongVideoCharacter): number {
-  return ch.looks.filter((lk) => Boolean(lk.reference_asset_id)).length;
+  return ch.looks.filter((lk) => Boolean(lookWardrobeRefId(lk))).length;
 }
 
 function characterPortraitsComplete(ch: LongVideoCharacter): boolean {
@@ -1546,6 +1667,34 @@ function removeLook(ci: number, li: number) {
   flex-direction: column;
   gap: 2px;
   margin-top: 4px;
+}
+
+.lv-cast-workshop__identity-views {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.lv-cast-workshop__identity-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--dq-surface-elevated) 42%, transparent);
+  border: 0.5px solid var(--dq-glass-border, var(--dq-border-subtle));
+}
+
+.lv-cast-workshop__identity-card.is-master {
+  border-color: color-mix(in srgb, var(--dq-accent) 35%, var(--dq-border-subtle));
+}
+
+.lv-cast-workshop__identity-card.is-ready {
+  border-color: color-mix(in srgb, var(--dq-success) 22%, var(--dq-border-subtle));
+}
+
+.lv-cast-workshop__identity-card .lv-cast-workshop__look-portrait {
+  max-height: 220px;
 }
 
 .lv-cast-workshop__looks {

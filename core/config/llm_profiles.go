@@ -119,7 +119,7 @@ func parseLLMProfiles(raw any) []LLMProfile {
 			Protocol:       FirstNonEmpty(strAny(m["protocol"]), "openai"),
 			BaseURL:        strAny(m["base_url"]),
 			AuthStyle:      FirstNonEmpty(strAny(m["auth_style"]), "bearer"),
-			APIKey:         strAny(m["api_key"]),
+			APIKey:         SanitizeAPIKey(strAny(m["api_key"])),
 			Enabled:        boolAny(m["enabled"], true),
 			DefaultDialect: strAny(m["default_dialect"]),
 			PresetID:       strAny(m["preset_id"]),

@@ -211,17 +211,43 @@ func (p *MakeProvider) ListAdapters(ctx context.Context, forModel string) (any, 
 }
 
 func (p *MakeProvider) CreateImage(ctx context.Context, body map[string]any) (map[string]any, error) {
-	m, _, _, err := p.doJSON(ctx, http.MethodPost, "/api/images/generations", body)
+	normalized, req, err := NormalizeImageBody(body)
+	if err != nil {
+		return nil, err
+	}
+	path := "/api/images/generations"
+	if req.Mode == port.ImageModeEdit || req.Mode == port.ImageModeInpaint || req.Mode == port.ImageModeI2I {
+		// Make uses edits for conditioned image jobs when available.
+		path = "/api/images/edits"
+	}
+	m, _, status, err := p.doJSON(ctx, http.MethodPost, path, normalized)
+	if err != nil && path == "/api/images/edits" && status == 404 {
+		// Older Make builds may lack /edits — fall back to generations with mode set.
+		m, _, _, err = p.doJSON(ctx, http.MethodPost, "/api/images/generations", normalized)
+	}
 	return m, err
 }
 
 func (p *MakeProvider) CreateVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
-	m, _, _, err := p.doJSON(ctx, http.MethodPost, "/api/videos/generations", body)
+	normalized, req, err := NormalizeVideoBody(body)
+	if err != nil {
+		return nil, err
+	}
+	// Make animate/edits path for conditioned modes; generations for pure t2v.
+	path := "/api/videos/generations"
+	if req.Mode != port.VideoModeT2V {
+		path = "/api/videos/edits"
+	}
+	m, _, _, err := p.doJSON(ctx, http.MethodPost, path, normalized)
 	return m, err
 }
 
 func (p *MakeProvider) EditVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
-	m, _, _, err := p.doJSON(ctx, http.MethodPost, "/api/videos/edits", body)
+	normalized, _, err := NormalizeVideoBody(body)
+	if err != nil {
+		return nil, err
+	}
+	m, _, _, err := p.doJSON(ctx, http.MethodPost, "/api/videos/edits", normalized)
 	return m, err
 }
 

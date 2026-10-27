@@ -105,16 +105,19 @@ func (p *OpenAIImageProvider) CreateImage(ctx context.Context, body map[string]a
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("openai API key not configured")
 	}
-	model := first(strVal(body["model"]), p.model, "gpt-image-1")
-	prompt := strVal(body["prompt"])
-	if prompt == "" {
-		return nil, fmt.Errorf("prompt is required")
+	req, err := ParseImageRequest(body)
+	if err != nil {
+		return nil, err
 	}
+	if req.Mode != port.ImageModeT2I {
+		return nil, fmt.Errorf("openai image provider only supports mode t2i (got %s)", req.Mode)
+	}
+	model := first(req.Model, p.model, "gpt-image-1")
 	payload := map[string]any{
 		"model":  model,
-		"prompt": prompt,
+		"prompt": req.Prompt,
 		"n":      1,
-		"size":   first(strVal(body["size"]), "1024x1024"),
+		"size":   first(req.Size, "1024x1024"),
 	}
 	m, err := p.postJSON(ctx, "/images/generations", payload)
 	if err != nil {

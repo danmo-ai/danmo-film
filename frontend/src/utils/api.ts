@@ -78,6 +78,24 @@ export type FilmLlmModelParams = {
   thinking_budget?: number;
 };
 
+/** Per-model video capability (providers.video_model_params), keyed by bare model id. */
+export type FilmVideoModelParams = {
+  modes?: string[];
+  protocol?: string;
+  /** Vendor media type for v2v: reference_video | first_clip */
+  v2v_slot?: string;
+  max_reference_images?: number;
+  max_reference_videos?: number;
+  max_duration_sec?: number;
+};
+
+/** Per-model image capability (providers.image_model_params). */
+export type FilmImageModelParams = {
+  modes?: string[];
+  protocol?: string;
+  max_reference_images?: number;
+};
+
 export type FilmLlmProfile = {
   id: string;
   label?: string;
@@ -138,6 +156,10 @@ export type FilmSettingsPayload = {
     llm_default_top_p?: number;
     llm_default_thinking_mode?: string;
     llm_model_params?: Record<string, FilmLlmModelParams>;
+    /** Video capability catalog by bare model id (modes / protocol / limits). */
+    video_model_params?: Record<string, FilmVideoModelParams>;
+    /** Image capability catalog by bare model id. */
+    image_model_params?: Record<string, FilmImageModelParams>;
     generation: FilmProviderBlock;
     /** Video provider instances (multi-profile, same vendor allowed). */
     generation_profiles?: FilmGenProfile[];
@@ -236,13 +258,41 @@ export type ScriptParseDecomposeResult = {
     id: string;
     name: string;
     default_look_id: string;
-    looks: Array<{ id: string; label: string; body: string }>;
+    looks: Array<{
+      id: string;
+      label: string;
+      body: string;
+      decision?: string;
+      scope?: string;
+      episode_only?: boolean;
+    }>;
+    decision?: string;
+    scope?: string;
+    episode_only?: boolean;
+    visual_identity?: string;
+    identity_baseline?: string;
+    role?: string;
+    aliases?: string[];
+    age_range?: string;
+    gender_presentation?: string;
+    voice_manner?: string;
+    performance_notes?: string;
   }>;
   scenes?: Array<{
     id: string;
     name: string;
     default_look_id: string;
-    looks: Array<{ id: string; label: string; body: string }>;
+    looks: Array<{
+      id: string;
+      label: string;
+      body: string;
+      decision?: string;
+      scope?: string;
+      episode_only?: boolean;
+    }>;
+    decision?: string;
+    scope?: string;
+    episode_only?: boolean;
     spatial_layout_json?: Record<string, unknown>;
   }>;
   scene_beats: Array<{ order: number; title?: string; beat: string }>;
@@ -1301,6 +1351,7 @@ export const api = {
         model?: string;
         long_video_project_id?: string;
         existing_pipeline?: ScriptPipeline;
+        existing_roster?: import('@/utils/longVideoParseRoster').ExistingParseRoster;
         stop_at?: string;
         until_shots?: boolean;
         target_duration_sec?: number;

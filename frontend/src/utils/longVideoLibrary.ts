@@ -3,6 +3,9 @@
  */
 
 import type {
+  CharacterIdentityAngle,
+  CharacterIdentitySheet,
+  CharacterIdentityView,
   LibraryEntityVersion,
   LongVideoAssetStatus,
   LongVideoCharacter,
@@ -13,6 +16,7 @@ import type {
   LongVideoSeriesState,
 } from '@/types';
 import { newStableId } from './longVideoSeries';
+import { normalizeCharacterIdentity } from './longVideoProject';
 
 /**
  * Status lives on the **library version** (`definition.version_status`).
@@ -99,6 +103,12 @@ function looksFromDef(raw: unknown): LongVideoCharacterLook[] {
         body: String(o.body ?? ''),
         vision_description:
           o.vision_description != null ? String(o.vision_description) : undefined,
+        wardrobe_ref_asset_id:
+          o.wardrobe_ref_asset_id != null
+            ? String(o.wardrobe_ref_asset_id)
+            : o.reference_asset_id != null
+              ? String(o.reference_asset_id)
+              : undefined,
         reference_asset_id:
           o.reference_asset_id != null ? String(o.reference_asset_id) : undefined,
         lora_id: o.lora_id != null ? String(o.lora_id) : undefined,
@@ -185,22 +195,50 @@ function persistLookStatus(
   return look.look_status === 'draft' ? 'draft' : 'final';
 }
 
+function identitySheetFromDef(raw: unknown): CharacterIdentitySheet | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const viewsRaw = Array.isArray(o.views) ? o.views : [];
+  const views: CharacterIdentityView[] = viewsRaw
+    .filter((x) => x && typeof x === 'object')
+    .map((v) => {
+      const row = v as Record<string, unknown>;
+      const angle = String(row.angle ?? '') as CharacterIdentityAngle;
+      return {
+        angle,
+        asset_id: row.asset_id != null ? String(row.asset_id) : undefined,
+        prompt: row.prompt != null ? String(row.prompt) : undefined,
+      };
+    })
+    .filter((v) =>
+      v.angle === 'front'
+      || v.angle === 'three_quarter'
+      || v.angle === 'profile'
+      || v.angle === 'back'
+      || v.angle === 'full_body',
+    );
+  if (!views.length) return undefined;
+  return { master_angle: 'front', views };
+}
+
 export function characterDefinitionFromRoster(ch: LongVideoCharacter): Record<string, unknown> {
+  const normalized = normalizeCharacterIdentity(ch);
   return {
-    roster_id: ch.id,
-    name: ch.name,
-    role: ch.role ?? 'supporting',
-    aliases: ch.aliases ?? [],
-    age_range: ch.age_range ?? '',
-    gender_presentation: ch.gender_presentation ?? '',
-    identity_baseline: ch.identity_baseline ?? '',
-    visual_identity: ch.visual_identity ?? '',
-    voice_manner: ch.voice_manner ?? '',
-    performance_notes: ch.performance_notes ?? '',
-    identity_notes: ch.identity_notes ?? '',
+    roster_id: normalized.id,
+    name: normalized.name,
+    role: normalized.role ?? 'supporting',
+    aliases: normalized.aliases ?? [],
+    age_range: normalized.age_range ?? '',
+    gender_presentation: normalized.gender_presentation ?? '',
+    identity_baseline: normalized.identity_baseline ?? '',
+    visual_identity: normalized.visual_identity ?? '',
+    voice_manner: normalized.voice_manner ?? '',
+    performance_notes: normalized.performance_notes ?? '',
+    identity_notes: normalized.identity_notes ?? '',
+    identity_sheet: normalized.identity_sheet ?? null,
     // Preserve per-look status so draft looks on a final character stay editable.
-    looks: ch.looks.map((lk) => ({ ...lk, look_status: persistLookStatus(lk) })),
-    default_look_id: ch.default_look_id,
+    looks: normalized.looks.map((lk) => ({ ...lk, look_status: persistLookStatus(lk) })),
+    default_look_id: normalized.default_look_id,
   };
 }
 
@@ -236,11 +274,12 @@ export function characterFromLibraryDefinition(
       ? roleRaw
       : undefined;
   const str = (k: string) => (def[k] != null ? String(def[k]) : undefined);
-  return {
+  return normalizeCharacterIdentity({
     id,
     name: String(def.name ?? ''),
     looks: looks.length ? looks : [{ id: newStableId('clk_'), label: '默认', body: '' }],
     default_look_id: defaultLookId || looks[0]?.id || '',
+    identity_sheet: identitySheetFromDef(def.identity_sheet),
     role,
     aliases: aliases?.length ? aliases : undefined,
     age_range: str('age_range') || undefined,
@@ -253,7 +292,7 @@ export function characterFromLibraryDefinition(
     library_entity_id: entityId,
     library_version: version,
     asset_status: 'final',
-  };
+  });
 }
 
 export function sceneFromLibraryDefinition(

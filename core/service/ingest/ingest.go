@@ -18,7 +18,15 @@ var singleAssetKeys = []string{
 	"start_asset_id", "end_asset_id", "tail_asset_id",
 	"last_frame_asset_id", "end_frame_asset_id",
 	"keyframe_asset_id", "segment_asset_id", "reference_asset_id",
+	"source_video_asset_id", "video_asset_id",
 	"grounding_panorama_asset_id", "grounding_depth_asset_id", "final_asset_id",
+}
+
+var listAssetKeys = []string{
+	"reference_asset_ids",
+	"reference_video_asset_ids",
+	"reference_images",
+	"reference_videos",
 }
 
 func isSingleAssetKey(key string) bool {
@@ -28,6 +36,15 @@ func isSingleAssetKey(key string) bool {
 		}
 	}
 	return strings.HasSuffix(key, "_asset_id")
+}
+
+func isListAssetKey(key string) bool {
+	for _, k := range listAssetKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
 func GuessKind(mimeType, fallback string) string {
@@ -207,7 +224,7 @@ func stageAssetRefsDeep(ctx context.Context, v any, gen port.GenerationProvider,
 					continue
 				}
 			}
-			if key == "reference_asset_ids" {
+			if isListAssetKey(key) {
 				if rewritten, err := stageReferenceAssetIDs(ctx, val, gen, store); err != nil {
 					return nil, err
 				} else {

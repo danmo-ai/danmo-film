@@ -41,7 +41,23 @@ function applyLookVariant(
   base: LongVideoCharacterLook,
   patch?: LongVideoCharacterLookVariant,
 ): LongVideoCharacterLook {
-  if (!patch) return { ...base };
+  if (!patch) {
+    const wardrobe = base.wardrobe_ref_asset_id ?? base.reference_asset_id;
+    return { ...base, wardrobe_ref_asset_id: wardrobe };
+  }
+  const wardrobePatch =
+    patch.wardrobe_ref_asset_id !== undefined
+      ? patch.wardrobe_ref_asset_id
+      : patch.reference_asset_id !== undefined
+        ? patch.reference_asset_id
+        : undefined;
+  const wardrobeBase = base.wardrobe_ref_asset_id ?? base.reference_asset_id;
+  const wardrobe =
+    wardrobePatch === null
+      ? undefined
+      : wardrobePatch !== undefined
+        ? wardrobePatch
+        : wardrobeBase;
   return {
     id: base.id,
     label: patch.label !== undefined ? patch.label : base.label,
@@ -52,12 +68,13 @@ function applyLookVariant(
         : patch.vision_description !== undefined
           ? patch.vision_description
           : base.vision_description,
+    wardrobe_ref_asset_id: wardrobe,
     reference_asset_id:
       patch.reference_asset_id === null
         ? undefined
         : patch.reference_asset_id !== undefined
           ? patch.reference_asset_id
-          : base.reference_asset_id,
+          : base.reference_asset_id ?? wardrobe,
     lora_id:
       patch.lora_id === null
         ? undefined
@@ -107,14 +124,23 @@ function lookFromEpisodeOnlyPatch(
   patch: LongVideoCharacterLookVariant,
   fallbackBody = '',
 ): LongVideoCharacterLook {
+  const wardrobe =
+    patch.wardrobe_ref_asset_id === null
+      ? undefined
+      : patch.wardrobe_ref_asset_id !== undefined
+        ? patch.wardrobe_ref_asset_id ?? undefined
+        : patch.reference_asset_id === null
+          ? undefined
+          : (patch.reference_asset_id ?? undefined);
   return {
     id: patch.look_id,
-    label: patch.label ?? '本集装扮',
+    label: patch.label ?? '本集服装',
     body: patch.body ?? fallbackBody,
     vision_description:
       patch.vision_description === null ? undefined : (patch.vision_description ?? undefined),
+    wardrobe_ref_asset_id: wardrobe,
     reference_asset_id:
-      patch.reference_asset_id === null ? undefined : (patch.reference_asset_id ?? undefined),
+      patch.reference_asset_id === null ? undefined : (patch.reference_asset_id ?? wardrobe),
     lora_id: patch.lora_id === null ? undefined : (patch.lora_id ?? undefined),
     portrait_prompt:
       patch.portrait_prompt === null ? undefined : (patch.portrait_prompt ?? undefined),
@@ -173,6 +199,12 @@ export function materializeCharacters(
       voice_manner: pickStr(v?.voice_manner, ch.voice_manner),
       performance_notes: pickStr(v?.performance_notes, ch.performance_notes),
       identity_notes: ch.identity_notes,
+      identity_sheet:
+        v?.identity_sheet === null
+          ? undefined
+          : v?.identity_sheet !== undefined
+            ? v.identity_sheet
+            : ch.identity_sheet,
       looks,
       default_look_id: defaultLookId,
       library_entity_id: ch.library_entity_id,
@@ -198,6 +230,7 @@ export function materializeCharacters(
       voice_manner: v.voice_manner === null ? undefined : (v.voice_manner ?? undefined),
       performance_notes:
         v.performance_notes === null ? undefined : (v.performance_notes ?? undefined),
+      identity_sheet: v.identity_sheet === null ? undefined : (v.identity_sheet ?? undefined),
       looks,
       default_look_id: v.default_look_id ?? looks[0]?.id ?? '',
     });
@@ -312,13 +345,15 @@ export function episodeOnlyCharacterVariant(ch: LongVideoCharacter): LongVideoCh
     voice_manner: ch.voice_manner ?? null,
     performance_notes: ch.performance_notes ?? null,
     default_look_id: ch.default_look_id,
+    identity_sheet: ch.identity_sheet ?? null,
     looks: ch.looks.map((lk) => ({
       look_id: lk.id,
       episode_only: true,
       label: lk.label,
       body: lk.body,
       vision_description: lk.vision_description ?? null,
-      reference_asset_id: lk.reference_asset_id ?? null,
+      wardrobe_ref_asset_id: lk.wardrobe_ref_asset_id ?? lk.reference_asset_id ?? null,
+      reference_asset_id: lk.reference_asset_id ?? lk.wardrobe_ref_asset_id ?? null,
       lora_id: lk.lora_id ?? null,
       portrait_prompt: lk.portrait_prompt ?? null,
     })),
@@ -379,7 +414,11 @@ export function deriveCharacterLookVariant(
       label: overrides.label ?? `${baseLook.label}·本集`,
       body: overrides.body ?? baseLook.body,
       vision_description: null,
-      reference_asset_id: overrides.reference_asset_id ?? null,
+      wardrobe_ref_asset_id:
+        overrides.wardrobe_ref_asset_id
+        ?? overrides.reference_asset_id
+        ?? null,
+      reference_asset_id: overrides.reference_asset_id ?? overrides.wardrobe_ref_asset_id ?? null,
       portrait_prompt: null,
     },
   };
@@ -621,7 +660,13 @@ function lookFieldPatch(
     patch.vision_description = effective.vision_description ?? null;
     changed = true;
   }
-  if ((effective.reference_asset_id ?? '') !== (base.reference_asset_id ?? '')) {
+  const effWardrobe = effective.wardrobe_ref_asset_id ?? effective.reference_asset_id ?? '';
+  const baseWardrobe = base.wardrobe_ref_asset_id ?? base.reference_asset_id ?? '';
+  if (effWardrobe !== baseWardrobe) {
+    patch.wardrobe_ref_asset_id = effWardrobe || null;
+    patch.reference_asset_id = (effective.reference_asset_id ?? effWardrobe) || null;
+    changed = true;
+  } else if ((effective.reference_asset_id ?? '') !== (base.reference_asset_id ?? '')) {
     patch.reference_asset_id = effective.reference_asset_id ?? null;
     changed = true;
   }
@@ -727,7 +772,8 @@ export function diffCharacterAgainstSeries(
         label: lk.label,
         body: lk.body,
         vision_description: lk.vision_description ?? null,
-        reference_asset_id: lk.reference_asset_id ?? null,
+        wardrobe_ref_asset_id: lk.wardrobe_ref_asset_id ?? lk.reference_asset_id ?? null,
+        reference_asset_id: lk.reference_asset_id ?? lk.wardrobe_ref_asset_id ?? null,
         lora_id: lk.lora_id ?? null,
         portrait_prompt: lk.portrait_prompt ?? null,
       });

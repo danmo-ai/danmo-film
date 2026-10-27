@@ -106,19 +106,19 @@ func (p *VolcengineProvider) resolveStage(id string) string {
 }
 
 func (p *VolcengineProvider) CreateImage(ctx context.Context, body map[string]any) (map[string]any, error) {
-	model := strVal(body["model"])
-	if model == "" {
-		model = "doubao-seedream-3-0-t2i-250415"
+	req, err := ParseImageRequest(body)
+	if err != nil {
+		return nil, err
 	}
-	prompt := strVal(body["prompt"])
-	if prompt == "" {
-		return nil, fmt.Errorf("prompt is required")
+	if req.Mode != port.ImageModeT2I {
+		return nil, fmt.Errorf("volcengine image only supports mode t2i (got %s)", req.Mode)
 	}
+	model := first(req.Model, "doubao-seedream-3-0-t2i-250415")
 	payload := map[string]any{
-		"model":  model,
-		"prompt": prompt,
-		"size":   first(strVal(body["size"]), "1024x1024"),
-		"n":      1,
+		"model":           model,
+		"prompt":          req.Prompt,
+		"size":            first(req.Size, "1024x1024"),
+		"n":               1,
 		"response_format": "url",
 	}
 	m, err := p.postJSON(ctx, "/api/v3/images/generations", payload)
@@ -140,34 +140,70 @@ func (p *VolcengineProvider) CreateImage(ctx context.Context, body map[string]an
 }
 
 func (p *VolcengineProvider) CreateVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
-	return p.submitVideo(ctx, body, false)
+	return p.submitVideo(ctx, body)
 }
 
 func (p *VolcengineProvider) EditVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
-	return p.submitVideo(ctx, body, true)
+	return p.submitVideo(ctx, body)
 }
 
-func (p *VolcengineProvider) submitVideo(ctx context.Context, body map[string]any, isEdit bool) (map[string]any, error) {
+func (p *VolcengineProvider) submitVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("volcengine API key not configured")
 	}
-	model := first(strVal(body["model"]), p.model)
-	prompt := strVal(body["prompt"])
-	content := []map[string]any{{"type": "text", "text": prompt}}
-	firstFrame := first(strVal(body["source_asset_id"]), strVal(body["start_asset_id"]))
-	lastFrame := first(strVal(body["tail_asset_id"]), strVal(body["end_asset_id"]))
-	if isEdit && firstFrame == "" {
-		return nil, fmt.Errorf("volcengine i2v requires source_asset_id")
+	req, err := ParseVideoRequest(body)
+	if err != nil {
+		return nil, err
 	}
-	if firstFrame != "" {
-		content = append(content, map[string]any{
-			"type": "image_url", "image_url": map[string]any{"url": p.resolveStage(firstFrame)}, "role": "first_frame",
-		})
+	model := first(req.Model, p.model)
+	content := []map[string]any{}
+	if req.Prompt != "" {
+		content = append(content, map[string]any{"type": "text", "text": req.Prompt})
 	}
-	if lastFrame != "" {
+	switch req.Mode {
+	case port.VideoModeT2V:
+		// text only
+	case port.VideoModeI2V:
 		content = append(content, map[string]any{
-			"type": "image_url", "image_url": map[string]any{"url": p.resolveStage(lastFrame)}, "role": "last_frame",
+			"type": "image_url", "image_url": map[string]any{"url": p.resolveStage(req.FirstFrame)}, "role": "first_frame",
 		})
+	case port.VideoModeFLF:
+		content = append(content,
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": p.resolveStage(req.FirstFrame)}, "role": "first_frame"},
+			map[string]any{"type": "image_url", "image_url": map[string]any{"url": p.resolveStage(req.LastFrame)}, "role": "last_frame"},
+		)
+	case port.VideoModeR2V:
+		for _, id := range filterNonEmptyURLs(req.ReferenceImages) {
+			content = append(content, map[string]any{
+				"type": "image_url", "image_url": map[string]any{"url": p.resolveStage(id)}, "role": "reference_image",
+			})
+		}
+		for _, id := range filterNonEmptyURLs(req.ReferenceVideos) {
+			content = append(content, map[string]any{
+				"type": "video_url", "video_url": map[string]any{"url": p.resolveStage(id)}, "role": "reference_video",
+			})
+		}
+	case port.VideoModeV2V:
+		nVideo := 0
+		for _, id := range filterNonEmptyURLs(req.ReferenceVideos) {
+			content = append(content, map[string]any{
+				"type": "video_url", "video_url": map[string]any{"url": p.resolveStage(id)}, "role": "reference_video",
+			})
+			nVideo++
+		}
+		for _, id := range filterNonEmptyURLs(req.ReferenceImages) {
+			content = append(content, map[string]any{
+				"type": "image_url", "image_url": map[string]any{"url": p.resolveStage(id)}, "role": "reference_image",
+			})
+		}
+		if nVideo == 0 {
+			return nil, fmt.Errorf("volcengine v2v requires reference video")
+		}
+	default:
+		return nil, fmt.Errorf("volcengine unsupported video mode %q", req.Mode)
+	}
+	if len(content) == 0 {
+		return nil, fmt.Errorf("volcengine video content empty")
 	}
 	payload := map[string]any{"model": model, "content": content}
 	m, err := p.postJSON(ctx, "/api/v3/contents/generations/tasks", payload)

@@ -281,15 +281,45 @@ export type LongVideoFlfMode = 'none' | 'first_last' | 'continuation';
  */
 export type LongVideoAssetStatus = 'draft' | 'final';
 
+/** Identity sheet camera angles (character-level, shared across wardrobes). */
+export type CharacterIdentityAngle =
+  | 'front'
+  | 'three_quarter'
+  | 'profile'
+  | 'back'
+  | 'full_body';
+
+export interface CharacterIdentityView {
+  angle: CharacterIdentityAngle;
+  asset_id?: string;
+  /** Cached T2I prompt for this view. */
+  prompt?: string;
+}
+
+/** Multi-view identity lock — face/hair/build; not episode wardrobe. */
+export interface CharacterIdentitySheet {
+  /** Master view used to seed other angles. */
+  master_angle: 'front';
+  views: CharacterIdentityView[];
+}
+
 export interface LongVideoCharacterLook {
   id: string;
   label: string;
   body: string;
   /** Manual vision backfill for keyframe outfit injection (does not replace body). */
   vision_description?: string;
-  /** Cast portrait / reference image (gallery asset). */
+  /**
+   * Wardrobe / costume reference for this look (silhouette + outfit detail).
+   * Prefer this over deprecated `reference_asset_id`.
+   */
+  wardrobe_ref_asset_id?: string;
+  /**
+   * @deprecated Legacy single portrait; migrated to identity front + wardrobe_ref.
+   */
   reference_asset_id?: string;
   lora_id?: string;
+  /** @deprecated Prefer identity view prompts / wardrobe generation prompts. */
   portrait_prompt?: string;
   /**
    * Look-level lifecycle. Final looks are immutable; draft looks can edit.
@@ -312,14 +342,16 @@ export type LongVideoInspectorTab = 'frame' | 'clip';
 export type LongVideoCastRole = 'protagonist' | 'supporting' | 'extra';
 
 /**
- * Stable identity across looks. Outfit/hair/props live on looks[];
- * face/body baseline belongs here (visual_identity).
+ * Stable identity across wardrobes. Outfit/hair/props live on looks[];
+ * face/build baseline + multi-view sheet belong here.
  */
 export interface LongVideoCharacter {
   id: string;
   name: string;
   looks: LongVideoCharacterLook[];
   default_look_id: string;
+  /** Multi-view identity references (front / 3/4 / profile / …). */
+  identity_sheet?: CharacterIdentitySheet;
   role?: LongVideoCastRole;
   aliases?: string[];
   /** Age for T2I, e.g. "20s" / "约28". */
@@ -816,6 +848,8 @@ export interface LongVideoCharacterLookVariant {
   label?: string;
   body?: string;
   vision_description?: string | null;
+  wardrobe_ref_asset_id?: string | null;
+  /** @deprecated Prefer wardrobe_ref_asset_id. */
   reference_asset_id?: string | null;
   lora_id?: string | null;
   portrait_prompt?: string | null;
@@ -836,6 +870,8 @@ export interface LongVideoCharacterVariant {
   voice_manner?: string | null;
   performance_notes?: string | null;
   default_look_id?: string;
+  /** Episode override of identity sheet (null clears inherited sheet views' assets when episode_only). */
+  identity_sheet?: CharacterIdentitySheet | null;
   looks?: LongVideoCharacterLookVariant[];
   /** Whole character exists only on this episode until promoted to series. */
   episode_only?: boolean;

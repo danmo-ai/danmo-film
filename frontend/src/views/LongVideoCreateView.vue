@@ -154,11 +154,15 @@
             @promote-to-series="onPromoteCharacterToSeries"
             @promote-look-to-series="onPromoteCharacterLookToSeries"
             @update:characters="onUpdateCharacters"
-            @generate-portrait="onGeneratePortrait"
-            @pick-portrait-gallery="onPickPortraitGallery"
-            @clear-portrait="onClearPortrait"
+            @generate-identity-front="onGenerateIdentityFront"
+            @generate-identity-angle="onGenerateIdentityAngle"
+            @pick-identity-gallery="onPickIdentityGallery"
+            @clear-identity-view="onClearIdentityView"
+            @generate-portrait="onGenerateWardrobeRef"
+            @pick-portrait-gallery="onPickWardrobeGallery"
+            @clear-portrait="onClearWardrobeRef"
             @vision-backfill="onVisionBackfillLook"
-            @batch-generate-portraits="onBatchGeneratePortraits"
+            @batch-generate-portraits="onBatchGenerateWardrobeRefs"
             @import-style-anchor="onUpdateStyleAnchor"
             @go-to-script="onEditorTabChange('script')"
           />
@@ -414,6 +418,7 @@ import { useTasksStore } from '@/stores/tasks';
 import { useRegistryStore } from '@/stores/registry';
 import type {
   LongVideoChainMode,
+  CharacterIdentityAngle,
   LongVideoCharacter,
   LongVideoChapterAnalysis,
   LongVideoEditorTab,
@@ -469,7 +474,9 @@ import {
 } from '@/utils/registryParamSchema';
 import {
   allocateShotDurations,
-  buildPortraitPrompt,
+  buildIdentityAnglePrompt,
+  buildIdentityFrontPrompt,
+  buildWardrobeRefPrompt,
   buildCastVisionBackfillQuestion,
   buildSceneVisionBackfillQuestion,
   buildParseProvenanceByShot,
@@ -504,9 +511,14 @@ import {
   keyframePromptContextForShot,
   KEYFRAME_CAST_NEGATIVE_ZH,
   KEYFRAME_CAST_NEGATIVE_EN,
+  charactersMissingIdentityFront,
+  identityFrontAssetId,
+  lookWardrobeRefId,
   looksMissingPortrait,
   looksMissingSceneReference,
   normalizeCharacterLookLabels,
+  normalizeCharacterRoster,
+  patchIdentityView,
   mergeCharacterRosters,
   mergeSceneRosters,
   mergeKeyframeLoraAdapters,
@@ -546,6 +558,7 @@ import {
   assertProviderSupports,
   capReferenceAssetIds,
   chainModeToCapabilityMode,
+  chainModeToVideoMode,
   validateReferenceRequirement,
 } from '@/utils/generationCapabilities';
 import {
@@ -585,6 +598,7 @@ import {
   attachParseRosterToEpisode,
   remapShotsThroughCharacterLinks,
 } from '@/utils/longVideoEpisodeAttach';
+import { buildExistingRosterForParse } from '@/utils/longVideoParseRoster';
 import {
   loadSeriesWithLibraryMigration,
 } from '@/utils/longVideoLibrary';
@@ -659,7 +673,8 @@ const batchPortraitGenerating = ref(false);
 const sceneRefGeneratingKey = ref<string | null>(null);
 const batchSceneRefGenerating = ref(false);
 const batchGroupGenerating = ref(false);
-const galleryPickMode = ref<'keyframe' | 'portrait' | 'scene_ref'>('keyframe');
+const galleryPickMode = ref<'keyframe' | 'portrait' | 'scene_ref' | 'identity'>('keyframe');
+const galleryPickIdentity = ref<{ ci: number; angle: CharacterIdentityAngle } | null>(null);
 const galleryPickPortrait = ref<{ ci: number; li: number } | null>(null);
 const galleryPickSceneRef = ref<{ si: number; li: number } | null>(null);
 const consistencyWarnings = ref<Record<number, string>>({});
@@ -1030,7 +1045,10 @@ const scriptStepDone = computed(() => {
 const castStepDone = computed(() => {
   const chars = effectiveCharacters.value;
   if (!chars.length) return false;
-  return looksMissingPortrait(chars).length === 0;
+  return (
+    charactersMissingIdentityFront(chars).length === 0
+    && looksMissingPortrait(chars).length === 0
+  );
 });
 
 const scenesStepDone = computed(() => {
@@ -1194,12 +1212,18 @@ function portraitKey(ci: number, li: number): string {
   return `${ci}-${li}`;
 }
 
-function patchLookPortrait(
+function patchLookWardrobe(
   ci: number,
   li: number,
-  patch: { reference_asset_id?: string; portrait_prompt?: string; body?: string; vision_description?: string },
+  patch: {
+    wardrobe_ref_asset_id?: string;
+    reference_asset_id?: string;
+    portrait_prompt?: string;
+    body?: string;
+    vision_description?: string;
+  },
 ) {
-  const base = effectiveCharacters.value;
+  const base = normalizeCharacterRoster(effectiveCharacters.value);
   if (!base[ci]?.looks[li]) return;
   const characters = base.map((ch, i) => {
     if (i !== ci) return ch;
@@ -1208,17 +1232,37 @@ function patchLookPortrait(
       looks: ch.looks.map((lk, j) => {
         if (j !== li) return lk;
         const next = { ...lk, ...patch };
+        if (patch.wardrobe_ref_asset_id !== undefined) {
+          next.wardrobe_ref_asset_id = patch.wardrobe_ref_asset_id;
+          next.reference_asset_id = patch.wardrobe_ref_asset_id;
+        }
         if ('portrait_prompt' in patch && patch.portrait_prompt === undefined) {
           delete next.portrait_prompt;
         }
         if ('vision_description' in patch && patch.vision_description === undefined) {
           delete next.vision_description;
         }
+        if ('wardrobe_ref_asset_id' in patch && patch.wardrobe_ref_asset_id === undefined) {
+          delete next.wardrobe_ref_asset_id;
+          delete next.reference_asset_id;
+        }
         return next;
       }),
     };
   });
   onUpdateCharacters(characters);
+}
+
+function patchCharacterIdentity(
+  ci: number,
+  angle: CharacterIdentityAngle,
+  patch: { asset_id?: string | null; prompt?: string | null },
+) {
+  const base = normalizeCharacterRoster(effectiveCharacters.value);
+  const ch = base[ci];
+  if (!ch) return;
+  const next = base.map((c, i) => (i === ci ? patchIdentityView(c, angle, patch) : c));
+  onUpdateCharacters(next);
 }
 
 function sceneRefKey(si: number, li: number): string {
@@ -1317,6 +1361,7 @@ async function onGenerateSceneRef(si: number, li: number) {
     await ensureProjectSavedForGeneration();
     const genBody: Record<string, unknown> = {
       model,
+      mode: 't2i',
       prompt,
       negative_prompt: locale === 'zh' ? SCENE_ENV_NEGATIVE_ZH : SCENE_ENV_NEGATIVE_EN,
       size: `${width}x${height}`,
@@ -1425,63 +1470,85 @@ async function onBatchGenerateSceneRefs() {
   }
 }
 
-async function onGeneratePortrait(ci: number, li: number) {
+function identityGenKey(ci: number, angle: CharacterIdentityAngle): string {
+  return `id-${ci}-${angle}`;
+}
+
+async function submitCastImageGen(opts: {
+  key: string;
+  model: string;
+  prompt: string;
+  size: string;
+  metadata: Record<string, unknown>;
+  referenceAssetIds?: string[];
+  boundProjectId: string;
+}): Promise<string | null> {
+  const locale = resolveLongVideoLocale(uiLocale.value);
+  const modelParameters = (registryStore.registry?.models?.[opts.model] as Record<string, unknown> | undefined)
+    ?.parameters as Record<string, unknown> | undefined;
+  portraitGeneratingKey.value = opts.key;
+  await ensureProjectSavedForGeneration();
+  const genBody: Record<string, unknown> = {
+    model: opts.model,
+    mode: opts.referenceAssetIds?.length ? 'i2i' : 't2i',
+    prompt: opts.prompt,
+    negative_prompt: locale === 'zh' ? PORTRAIT_NEGATIVE_PROMPT_ZH : PORTRAIT_NEGATIVE_PROMPT_EN,
+    size: opts.size,
+    n: 1,
+    steps: keyframeComposeParams.steps,
+    guidance: keyframeComposeParams.guidance,
+    metadata: withProjectMetadata(opts.metadata),
+    priority: 'normal',
+  };
+  if (opts.referenceAssetIds?.length) {
+    genBody.reference_asset_ids = opts.referenceAssetIds;
+  }
+  appendImageInferenceFields(
+    genBody,
+    keyframeComposeParams as Record<string, unknown>,
+    modelParameters,
+  );
+  const submitRes = await api.gen.createImageGeneration(genBody);
+  const tid = taskIdFromSubmitResponse(submitRes);
+  if (!tid) throw new Error('no task id');
+  tasksStore.registerPageOwnedStream(tid);
+  const { assetId } = await waitForImageTask(tid);
+  if (!assetId) throw new Error('no asset');
+  if (!isStillActiveProject(opts.boundProjectId)) return null;
+  return assetId;
+}
+
+async function onGenerateIdentityFront(ci: number) {
   const lv = project.value;
   if (!lv) return;
   const boundProjectId = lv.project_id;
-  const chars = effectiveCharacters.value;
+  const chars = normalizeCharacterRoster(effectiveCharacters.value);
   const ch = chars[ci];
-  const look = ch?.looks[li];
-  if (!ch || !look) return;
-
+  if (!ch) return;
   const locale = resolveLongVideoLocale(uiLocale.value);
-  const otherNames = chars
-    .filter((_, i) => i !== ci)
-    .map((c) => c.name)
-    .filter(Boolean);
-  const prompt = buildPortraitPrompt(ch, look, effectiveStyleAnchor.value, locale, {
-    otherCharacterNames: otherNames,
-    useCache: false,
-  });
+  const prompt = buildIdentityFrontPrompt(ch, effectiveStyleAnchor.value, locale, { useCache: false });
   const model = lv.portrait_model ?? lv.keyframe_model ?? defaultKeyframeModel.value;
   const { width, height } = PORTRAIT_REFERENCE_SIZE;
-  const key = portraitKey(ci, li);
-  const modelParameters = (registryStore.registry?.models?.[model] as Record<string, unknown> | undefined)
-    ?.parameters as Record<string, unknown> | undefined;
-
-  portraitGeneratingKey.value = key;
+  const key = identityGenKey(ci, 'front');
   try {
-    await ensureProjectSavedForGeneration();
-    const genBody: Record<string, unknown> = {
+    const assetId = await submitCastImageGen({
+      key,
       model,
       prompt,
-      negative_prompt: locale === 'zh' ? PORTRAIT_NEGATIVE_PROMPT_ZH : PORTRAIT_NEGATIVE_PROMPT_EN,
       size: `${width}x${height}`,
-      n: 1,
-      steps: keyframeComposeParams.steps,
-      guidance: keyframeComposeParams.guidance,
-      metadata: withProjectMetadata({ long_video_phase: 'cast_portrait', cast_character_id: ch.id, cast_look_id: look.id }),
-      priority: 'normal',
-    };
-    appendImageInferenceFields(
-      genBody,
-      keyframeComposeParams as Record<string, unknown>,
-      modelParameters,
-    );
-    const submitRes = await api.gen.createImageGeneration(genBody);
-    const tid = taskIdFromSubmitResponse(submitRes);
-    if (!tid) throw new Error('no task id');
-    tasksStore.registerPageOwnedStream(tid);
-    const { assetId } = await waitForImageTask(tid);
-    if (!assetId) throw new Error('no asset');
-    if (!isStillActiveProject(boundProjectId)) return;
-    patchLookPortrait(ci, li, { reference_asset_id: assetId, portrait_prompt: prompt });
+      metadata: {
+        long_video_phase: 'cast_identity',
+        cast_character_id: ch.id,
+        cast_identity_angle: 'front',
+      },
+      boundProjectId,
+    });
+    if (!assetId) return;
+    patchCharacterIdentity(ci, 'front', { asset_id: assetId, prompt });
     try {
       await loadGallery(true);
-    } catch {
-      /* gallery refresh must not fail the generation flow */
-    }
-    toast.success($tt('video.longVideoPortraitDone'));
+    } catch { /* ignore */ }
+    toast.success($tt('video.longVideoIdentityFrontDone'));
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     toast.error($tt('studio.genFailed', { msg }));
@@ -1490,14 +1557,123 @@ async function onGeneratePortrait(ci: number, li: number) {
   }
 }
 
-function onPickPortraitGallery(ci: number, li: number) {
+async function onGenerateIdentityAngle(ci: number, angle: CharacterIdentityAngle) {
+  if (angle === 'front') {
+    await onGenerateIdentityFront(ci);
+    return;
+  }
+  const lv = project.value;
+  if (!lv) return;
+  const boundProjectId = lv.project_id;
+  const chars = normalizeCharacterRoster(effectiveCharacters.value);
+  const ch = chars[ci];
+  if (!ch) return;
+  const frontId = identityFrontAssetId(ch);
+  if (!frontId) {
+    toast.warning($tt('video.longVideoIdentityFrontRequired'));
+    return;
+  }
+  const locale = resolveLongVideoLocale(uiLocale.value);
+  const prompt = buildIdentityAnglePrompt(ch, angle, effectiveStyleAnchor.value, locale);
+  const model = lv.portrait_model ?? lv.keyframe_model ?? defaultKeyframeModel.value;
+  const { width, height } = PORTRAIT_REFERENCE_SIZE;
+  const key = identityGenKey(ci, angle);
+  try {
+    const assetId = await submitCastImageGen({
+      key,
+      model,
+      prompt,
+      size: `${width}x${height}`,
+      metadata: {
+        long_video_phase: 'cast_identity',
+        cast_character_id: ch.id,
+        cast_identity_angle: angle,
+      },
+      referenceAssetIds: [frontId],
+      boundProjectId,
+    });
+    if (!assetId) return;
+    patchCharacterIdentity(ci, angle, { asset_id: assetId, prompt });
+    try {
+      await loadGallery(true);
+    } catch { /* ignore */ }
+    toast.success($tt('video.longVideoIdentityAngleDone'));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.genFailed', { msg }));
+  } finally {
+    if (portraitGeneratingKey.value === key) portraitGeneratingKey.value = null;
+  }
+}
+
+function onPickIdentityGallery(ci: number, angle: CharacterIdentityAngle) {
+  galleryPickMode.value = 'identity';
+  galleryPickIdentity.value = { ci, angle };
+  showKeyframePicker.value = true;
+}
+
+function onClearIdentityView(ci: number, angle: CharacterIdentityAngle) {
+  patchCharacterIdentity(ci, angle, { asset_id: null, prompt: null });
+}
+
+async function onGenerateWardrobeRef(ci: number, li: number) {
+  const lv = project.value;
+  if (!lv) return;
+  const boundProjectId = lv.project_id;
+  const chars = normalizeCharacterRoster(effectiveCharacters.value);
+  const ch = chars[ci];
+  const look = ch?.looks[li];
+  if (!ch || !look) return;
+  const identityRefs = [
+    identityFrontAssetId(ch),
+    ch.identity_sheet?.views.find((v) => v.angle === 'three_quarter')?.asset_id?.trim(),
+  ].filter(Boolean) as string[];
+  if (!identityRefs.length) {
+    toast.warning($tt('video.longVideoIdentityFrontRequired'));
+    return;
+  }
+  const locale = resolveLongVideoLocale(uiLocale.value);
+  const prompt = buildWardrobeRefPrompt(ch, look, effectiveStyleAnchor.value, locale);
+  const model = lv.portrait_model ?? lv.keyframe_model ?? defaultKeyframeModel.value;
+  const { width, height } = PORTRAIT_REFERENCE_SIZE;
+  const key = portraitKey(ci, li);
+  try {
+    const assetId = await submitCastImageGen({
+      key,
+      model,
+      prompt,
+      size: `${width}x${height}`,
+      metadata: {
+        long_video_phase: 'cast_wardrobe',
+        cast_character_id: ch.id,
+        cast_look_id: look.id,
+      },
+      referenceAssetIds: identityRefs,
+      boundProjectId,
+    });
+    if (!assetId) return;
+    patchLookWardrobe(ci, li, { wardrobe_ref_asset_id: assetId, portrait_prompt: prompt });
+    try {
+      await loadGallery(true);
+    } catch { /* ignore */ }
+    toast.success($tt('video.longVideoWardrobeRefDone'));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    toast.error($tt('studio.genFailed', { msg }));
+  } finally {
+    if (portraitGeneratingKey.value === key) portraitGeneratingKey.value = null;
+  }
+}
+
+function onPickWardrobeGallery(ci: number, li: number) {
   galleryPickMode.value = 'portrait';
   galleryPickPortrait.value = { ci, li };
   showKeyframePicker.value = true;
 }
 
-function onClearPortrait(ci: number, li: number) {
-  patchLookPortrait(ci, li, {
+function onClearWardrobeRef(ci: number, li: number) {
+  patchLookWardrobe(ci, li, {
+    wardrobe_ref_asset_id: undefined,
     reference_asset_id: undefined,
     portrait_prompt: undefined,
     vision_description: undefined,
@@ -1505,10 +1681,10 @@ function onClearPortrait(ci: number, li: number) {
 }
 
 async function onVisionBackfillLook(ci: number, li: number) {
-  const chars = effectiveCharacters.value;
+  const chars = normalizeCharacterRoster(effectiveCharacters.value);
   const ch = chars[ci];
   const look = ch?.looks[li];
-  const assetId = look?.reference_asset_id;
+  const assetId = lookWardrobeRefId(look);
   if (!ch || !look || !assetId) return;
   const key = portraitKey(ci, li);
   visionBackfillKey.value = key;
@@ -1526,7 +1702,7 @@ async function onVisionBackfillLook(ci: number, li: number) {
     const question = buildCastVisionBackfillQuestion(ch, otherNames, locale);
     const text = await analyzeReferenceViaChat(assetId, question, { locale });
     if (text) {
-      patchLookPortrait(ci, li, { vision_description: text });
+      patchLookWardrobe(ci, li, { vision_description: text });
       toast.success($tt('video.longVideoCastVisionBackfillDone'));
     }
   } catch (e: unknown) {
@@ -1537,14 +1713,18 @@ async function onVisionBackfillLook(ci: number, li: number) {
   }
 }
 
-async function onBatchGeneratePortraits() {
+async function onBatchGenerateWardrobeRefs() {
   if (!project.value || batchPortraitGenerating.value) return;
+  const missingFront = charactersMissingIdentityFront(effectiveCharacters.value);
+  for (const ci of missingFront) {
+    await onGenerateIdentityFront(ci);
+  }
   const missing = looksMissingPortrait(effectiveCharacters.value);
-  if (!missing.length) return;
+  if (!missing.length && !missingFront.length) return;
   batchPortraitGenerating.value = true;
   try {
     for (const { characterIndex, lookIndex } of missing) {
-      await onGeneratePortrait(characterIndex, lookIndex);
+      await onGenerateWardrobeRef(characterIndex, lookIndex);
     }
   } finally {
     batchPortraitGenerating.value = false;
@@ -1596,6 +1776,19 @@ async function onCheckConsistency(index: number) {
 }
 
 function onGalleryDrawerPick(payload: { path: string }) {
+  if (galleryPickMode.value === 'identity' && galleryPickIdentity.value) {
+    const assetId = assetIdFromGalleryPath(payload.path);
+    if (!assetId) {
+      toast.warning($tt('canvas.controlImageAssetRequired'));
+      return;
+    }
+    const { ci, angle } = galleryPickIdentity.value;
+    patchCharacterIdentity(ci, angle, { asset_id: assetId });
+    galleryPickIdentity.value = null;
+    galleryPickMode.value = 'keyframe';
+    showKeyframePicker.value = false;
+    return;
+  }
   if (galleryPickMode.value === 'portrait' && galleryPickPortrait.value) {
     const assetId = assetIdFromGalleryPath(payload.path);
     if (!assetId) {
@@ -1603,7 +1796,7 @@ function onGalleryDrawerPick(payload: { path: string }) {
       return;
     }
     const { ci, li } = galleryPickPortrait.value;
-    patchLookPortrait(ci, li, { reference_asset_id: assetId });
+    patchLookWardrobe(ci, li, { wardrobe_ref_asset_id: assetId });
     galleryPickPortrait.value = null;
     galleryPickMode.value = 'keyframe';
     showKeyframePicker.value = false;
@@ -2553,6 +2746,10 @@ async function runScriptParsePipeline(strategy: LongVideoParseStrategy) {
       long_video_project_id: projectId,
       model: parseModel,
       existing_pipeline: activeScriptPipeline.value ?? undefined,
+      existing_roster: buildExistingRosterForParse(
+        effectiveCharacters.value,
+        effectiveScenes.value,
+      ),
       stop_at: 'gate1',
     },
     {
@@ -2881,6 +3078,10 @@ async function runExpandPipeline(opts: { mode: 'full' } | { mode: 'beat'; beatIn
           ...activeScriptPipeline.value,
           workflow: { ...activeScriptPipeline.value.workflow, facts_approved: true },
         },
+        existing_roster: buildExistingRosterForParse(
+          effectiveCharacters.value,
+          effectiveScenes.value,
+        ),
         until_shots: true,
         stop_at: 'gate2',
         target_duration_sec: lv.target_duration_sec ?? 60,
@@ -3051,6 +3252,7 @@ function onSelectBeatGroup(groupId: string) {
 function onUpdateCharacters(characters: LongVideoCharacter[]) {
   const lv = project.value;
   if (!lv) return;
+  characters = normalizeCharacterRoster(characters);
   const style = effectiveStyleAnchor.value;
   const character_anchor = syncRosterToCharacterAnchor(characters, style);
   if (lv.series_id && activeSeriesDetail.value?.id === lv.series_id) {
@@ -3509,6 +3711,7 @@ async function onGenerateKeyframe(index: number) {
     await ensureProjectSavedForGeneration();
     const genBody: Record<string, unknown> = {
       model: modelStr,
+      mode: castRefIds.length ? 'i2i' : 't2i',
       prompt: t2iPrompt,
       negative_prompt: negativePrompt || '',
       size: `${width}x${height}`,
@@ -3686,13 +3889,18 @@ function buildSegmentSubmitBody(
   const cappedDurationSec = Math.min(shotDurationSec(shot), MAX_SHOT_DURATION_SEC);
   const numFrames = numFramesForDurationSec(cappedDurationSec, fps, nfSchema);
   const { width, height } = outputSizePixels.value;
+  const videoMode = chainModeToVideoMode(chainMode);
   const body: Record<string, unknown> = {
     model: segModel,
+    mode: videoMode,
     operation: 'animate',
+    // i2v/flf use source as first frame; r2v still may include keyframe for UI
+    // readiness — adapter drops it when mode=r2v (mutually exclusive with refs).
     source_asset_id: sourceAssetId,
     prompt: motion,
     negative_prompt: p.negative_prompt || '',
     size: `${width}x${height}`,
+    duration: cappedDurationSec,
     num_frames: numFrames,
     fps,
     steps: p.steps || scalarDefault(segModel, 'steps', 40),
@@ -3704,6 +3912,7 @@ function buildSegmentSubmitBody(
       long_video_shot_id: shot.id,
       long_video_phase: 'segment',
       long_video_chain_mode: chainMode,
+      video_mode: videoMode,
       ...(segRefBindings.length
         ? { long_video_reference_bindings: serializeReferenceBindings(segRefBindings) }
         : {}),

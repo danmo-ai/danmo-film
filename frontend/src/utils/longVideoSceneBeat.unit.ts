@@ -39,6 +39,11 @@ assertEqual(
   { role: 'lead', appearance: '年轻女性', wardrobe: '白 T 恤 黑短裤' },
   'parseCharacterLookBody wardrobe',
 );
+assertEqual(
+  parseCharacterLookBody('发型：湿发贴额 | 服装：灰色卫衣 | 随身物：钥匙'),
+  { role: '', appearance: '湿发贴额', wardrobe: '灰色卫衣，钥匙' },
+  'parseCharacterLookBody structured hair/wardrobe/accessories',
+);
 
 assertEqual(
   splitSynopsisMood('赵今麦挑战孙悟空。\n热血逆袭，由挫败转向觉醒。'),

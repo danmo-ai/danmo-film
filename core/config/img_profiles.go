@@ -133,7 +133,7 @@ func parseImageProfileMap(m map[string]any) ImageProfile {
 		Label:   label,
 		Vendor:  vendor,
 		BaseURL: strings.TrimSpace(strAny(m["base_url"])),
-		APIKey:  strings.TrimSpace(strAny(m["api_key"])),
+		APIKey:  SanitizeAPIKey(strAny(m["api_key"])),
 		Enabled: boolAny(m["enabled"], true),
 		Models:  parseGenModels(m),
 	}

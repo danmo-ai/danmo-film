@@ -75,6 +75,19 @@ export function parseCharacterLookBody(body: string): ParsedCharacterLookBody {
     return { role: en[1].trim(), appearance, wardrobe };
   }
 
+  // Structured parse product: 发型：… | 服装：… | 随身物：…
+  const hairMatch = raw.match(/(?:发型|Hair)[:：]\s*([^|｜]+)/i);
+  const accessoriesMatch = raw.match(/(?:随身物|Accessories)[:：]\s*([^|｜]+)/i);
+  if (hairMatch || accessoriesMatch || /(?:发型|Hair|随身物|Accessories)[:：]/i.test(raw)) {
+    const hair = hairMatch?.[1]?.trim() ?? '';
+    const wardrobeParts = [wardrobe, accessoriesMatch?.[1]?.trim() ?? ''].filter(Boolean);
+    return {
+      role: '',
+      appearance: hair,
+      wardrobe: wardrobeParts.join(wardrobeParts.length > 1 ? '，' : ''),
+    };
+  }
+
   return { role: '', appearance: raw, wardrobe };
 }
 

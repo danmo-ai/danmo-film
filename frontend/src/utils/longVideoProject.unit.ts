@@ -18,6 +18,9 @@ import {
   insertKeyframeBefore,
   invalidateSegmentAsset,
   looksMissingPortrait,
+  identityFrontAssetId,
+  lookWardrobeRefId,
+  normalizeCharacterIdentity,
   mergeKeyframeLoraAdapters,
   inferScriptSourceMode,
   resolveScriptText,
@@ -53,6 +56,8 @@ import {
   segmentI2vSourceAssetId,
   charactersOnScreen,
   buildPortraitPrompt,
+  buildIdentityFrontPrompt,
+  buildWardrobeRefPrompt,
   portraitAppearanceForPrompt,
   buildCastVisionBackfillQuestion,
   buildSceneVisionBackfillQuestion,
@@ -182,27 +187,28 @@ assert(refs.length === 1 && refs[0] === 'asset_a', 'collect refs dedupe');
 
 const portraitPrompt = buildPortraitPrompt(chars[0]!, chars[0]!.looks[0]!, 'cinematic', 'en', { useCache: false });
 assert(portraitPrompt.includes('Alice'), 'portrait prompt');
-assert(portraitPrompt.includes('single person'), 'portrait solo constraint');
+assert(portraitPrompt.includes('same person') || portraitPrompt.includes('Wardrobe'), 'wardrobe ref prompt');
 
-const identityPortrait = buildPortraitPrompt(
-  {
-    id: 'c_id',
-    name: '林婉',
-    role: 'protagonist',
-    age_range: '约28',
-    identity_baseline: '合租室友',
-    visual_identity: '短发，瓜子脸',
-    default_look_id: 'l1',
-    looks: [{ id: 'l1', label: '日常', body: '白T恤黑短裤' }],
-  },
+const identityChar = {
+  id: 'c_id',
+  name: '林婉',
+  role: 'protagonist' as const,
+  age_range: '约28',
+  identity_baseline: '合租室友',
+  visual_identity: '短发，瓜子脸',
+  default_look_id: 'l1',
+  looks: [{ id: 'l1', label: '日常', body: '白T恤黑短裤' }],
+};
+const identityFront = buildIdentityFrontPrompt(identityChar, 'cinematic', 'zh', { useCache: false });
+assert(identityFront.includes('合租室友'), 'identity front includes baseline');
+assert(identityFront.includes('短发'), 'identity front includes visual identity');
+const wardrobePrompt = buildWardrobeRefPrompt(
+  identityChar,
   { id: 'l1', label: '日常', body: '白T恤黑短裤' },
   'cinematic',
   'zh',
-  { useCache: false },
 );
-assert(identityPortrait.includes('合租室友'), 'portrait includes identity baseline');
-assert(identityPortrait.includes('短发'), 'portrait includes visual identity');
-assert(identityPortrait.includes('白T恤'), 'portrait includes look wardrobe');
+assert(wardrobePrompt.includes('白T恤'), 'wardrobe prompt includes look outfit');
 
 const appearanceSplit = portraitAppearanceForPrompt(
   {
@@ -329,10 +335,13 @@ const promptB = keyframeGenerationPrompt('近景，女侠挥剑出击', {
 });
 assert(promptA !== promptB, 'keyframe prompts differ per scene');
 assert(promptA.includes('## 场景'), 'markdown scene section');
-assert(promptA.includes('## 角色定妆'), 'markdown cast section');
-assert(promptA.includes('装扮'), 'outfit line in cast section');
+assert(promptA.includes('## 角色身份'), 'markdown cast section');
+assert(promptA.includes('装扮') || promptA.includes('服装'), 'outfit line in cast section');
 assert(!promptA.includes('定妆提示词'), 'no portrait prompt in keyframe');
-assert(promptA.includes('勿复制定妆') || promptA.includes('do not copy portrait'), 'cast scene note');
+assert(
+  promptA.includes('勿复制身份参考') || promptA.includes('勿复制定妆') || promptA.includes('do not copy portrait'),
+  'cast scene note',
+);
 
 const desertScenes = [
   {
@@ -653,7 +662,27 @@ const castBlockers = productionBlockers(
   { shots: [], chain_mode: 'keyframe_only' },
   { characters: castNoRef, scenes: [] },
 );
-assert(castBlockers.includes('missing_cast_reference'), 'missing cast ref blocker');
+assert(castBlockers.includes('missing_cast_reference'), 'missing identity front blocker');
+assert(castBlockers.includes('missing_wardrobe_reference'), 'missing wardrobe ref blocker');
+
+const legacyLook = {
+  id: 'c_mig',
+  name: 'Maya',
+  default_look_id: 'l1',
+  looks: [{ id: 'l1', label: 'daily', body: 'red coat', reference_asset_id: 'fas_old' }],
+};
+const migratedIdentity = normalizeCharacterIdentity(legacyLook);
+assert(identityFrontAssetId(migratedIdentity) === 'fas_old', 'migrate seeds identity front');
+assert(lookWardrobeRefId(migratedIdentity.looks[0]) === 'fas_old', 'migrate seeds wardrobe ref');
+assert(
+  buildKeyframeReferenceBindings(
+    [migratedIdentity],
+    [{ character_id: 'c_mig', look_id: 'l1' }],
+    'Maya',
+    'face',
+  ).some((b) => b.purpose === 'identity' && b.asset_id === 'fas_old'),
+  'bindings include identity after migrate',
+);
 
 const tailBlockers = productionBlockers(
   {

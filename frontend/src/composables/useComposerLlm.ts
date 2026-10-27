@@ -202,6 +202,7 @@ export function useComposerLlm() {
       model?: string;
       long_video_project_id?: string;
       existing_pipeline?: import('@/types').ScriptPipeline;
+      existing_roster?: import('@/utils/longVideoParseRoster').ExistingParseRoster;
       stop_at?: string;
       until_shots?: boolean;
       target_duration_sec?: number;

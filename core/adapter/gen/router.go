@@ -359,13 +359,49 @@ func (r *Router) GetRegistry(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return map[string]any{"models": map[string]any{}}, nil
 	}
+	r.mu.RLock()
+	settings := r.settings
+	r.mu.RUnlock()
+	vidParams := config.VideoModelParamsMap(settings)
+	imgParams := config.ImageModelParamsMap(settings)
 	models := map[string]any{}
 	for _, row := range items {
 		id := strings.TrimSpace(fmt.Sprint(row["id"]))
 		if id == "" {
 			continue
 		}
-		models[id] = row
+		// Strip profile prefix from registry keys that use profile/model.
+		bare := id
+		if i := strings.LastIndex(id, "/"); i >= 0 && i+1 < len(id) {
+			bare = id[i+1:]
+		}
+		media := strings.ToLower(strings.TrimSpace(fmt.Sprint(row["media"])))
+		out := row
+		if vp, ok := vidParams[bare]; ok && (media == "" || media == "video") {
+			out = config.ApplyVideoParamsToModelRow(out, vp)
+		}
+		if ip, ok := imgParams[bare]; ok && (media == "" || media == "image") {
+			out = config.ApplyImageParamsToModelRow(out, ip)
+		}
+		models[id] = out
+	}
+	// Also expose catalog-only models (configured but not returned by live list).
+	for id, vp := range vidParams {
+		ref := id
+		if _, exists := models[ref]; exists {
+			continue
+		}
+		models[ref] = config.ApplyVideoParamsToModelRow(map[string]any{
+			"id": id, "label": id, "media": "video",
+		}, vp)
+	}
+	for id, ip := range imgParams {
+		if _, exists := models[id]; exists {
+			continue
+		}
+		models[id] = config.ApplyImageParamsToModelRow(map[string]any{
+			"id": id, "label": id, "media": "image",
+		}, ip)
 	}
 	return map[string]any{"models": models}, nil
 }
@@ -395,6 +431,19 @@ func (r *Router) CreateImage(ctx context.Context, body map[string]any) (map[stri
 	}
 	cp := cloneMap(body)
 	cp["model"] = bare
+	imgParams := config.ResolveImageModelParams(settings, bare)
+	req, perr := ParseImageRequest(cp)
+	if perr == nil {
+		if err := imgParams.AssertSupportsImageMode(string(req.Mode)); err != nil {
+			return nil, err
+		}
+	}
+	if imgParams.Protocol != "" {
+		cp["film_protocol"] = imgParams.Protocol
+	}
+	if len(imgParams.Modes) > 0 {
+		cp["film_modes"] = imgParams.Modes
+	}
 	out, err := c.CreateImage(ctx, cp)
 	if err != nil {
 		return nil, err
@@ -435,6 +484,27 @@ func (r *Router) dispatchVideo(
 	}
 	cp := cloneMap(body)
 	cp["model"] = bare
+	vidParams := config.ResolveVideoModelParams(settings, bare)
+	req, perr := ParseVideoRequest(cp)
+	if perr == nil {
+		if err := vidParams.AssertSupportsVideoMode(string(req.Mode)); err != nil {
+			return nil, err
+		}
+	}
+	switch {
+	case strings.TrimSpace(vidParams.Protocol) != "":
+		cp["film_protocol"] = vidParams.Protocol
+	case config.NormalizeGenVendorID(vendor.Vendor) == "danmo-make":
+		cp["film_protocol"] = config.VideoProtocolMakeNative
+	case !config.HasConfiguredVideoParams(settings, bare):
+		return nil, fmt.Errorf("video model %q has no providers.video_model_params entry; add modes/protocol in settings", bare)
+	}
+	if len(vidParams.Modes) > 0 {
+		cp["film_modes"] = vidParams.Modes
+	}
+	if vidParams.V2VSlot != "" {
+		cp["film_v2v_slot"] = vidParams.V2VSlot
+	}
 	out, err := fn(c, cp)
 	if err != nil {
 		return nil, err

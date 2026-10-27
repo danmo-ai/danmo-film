@@ -1,4 +1,7 @@
 import type {
+  CharacterIdentityAngle,
+  CharacterIdentitySheet,
+  CharacterIdentityView,
   KeyframeT2iProvenance,
   KeyframeT2iProvenanceSkipReason,
   LongVideoBeatGroup,
@@ -64,7 +67,7 @@ export function buildSceneVisionBackfillQuestion(
 export function buildKeyframeConsistencyQuestion(locale: 'zh' | 'en'): string {
   if (locale === 'zh') {
     return (
-      '对比定妆参考图与分镜图：角色面部、发型、服饰是否一致？' +
+      '对比身份参考图与分镜图：角色面部、发型、服饰是否一致？' +
       '若明显不一致，用一句简体中文说明差异；若基本一致，只回复「一致」。'
     );
   }
@@ -76,6 +79,138 @@ export function buildKeyframeConsistencyQuestion(locale: 'zh' | 'en'): string {
 
 /** Vertical reference size for cast portraits (avoid landscape group-shot bias). */
 export const PORTRAIT_REFERENCE_SIZE = { width: 768, height: 1024 } as const;
+
+/** All identity-sheet angles (front is master). */
+export const CHARACTER_IDENTITY_ANGLES: CharacterIdentityAngle[] = [
+  'front',
+  'three_quarter',
+  'profile',
+  'back',
+  'full_body',
+];
+
+/** Core angles required for a strong identity pack. */
+export const CHARACTER_IDENTITY_CORE_ANGLES: CharacterIdentityAngle[] = [
+  'front',
+  'three_quarter',
+  'profile',
+];
+
+export function emptyIdentitySheet(): CharacterIdentitySheet {
+  return {
+    master_angle: 'front',
+    views: CHARACTER_IDENTITY_ANGLES.map((angle) => ({ angle })),
+  };
+}
+
+export function lookWardrobeRefId(lk: LongVideoCharacterLook | undefined | null): string | undefined {
+  if (!lk) return undefined;
+  const id = (lk.wardrobe_ref_asset_id ?? lk.reference_asset_id)?.trim();
+  return id || undefined;
+}
+
+export function identityViewOf(
+  sheet: CharacterIdentitySheet | undefined | null,
+  angle: CharacterIdentityAngle,
+): CharacterIdentityView | undefined {
+  return sheet?.views.find((v) => v.angle === angle);
+}
+
+export function identityViewAssetId(
+  ch: LongVideoCharacter | undefined | null,
+  angle: CharacterIdentityAngle,
+): string | undefined {
+  const id = identityViewOf(ch?.identity_sheet, angle)?.asset_id?.trim();
+  return id || undefined;
+}
+
+export function identityFrontAssetId(ch: LongVideoCharacter | undefined | null): string | undefined {
+  return identityViewAssetId(ch, 'front');
+}
+
+/** Prefer front, then three_quarter, profile — for generation / bindings. */
+export function collectIdentityAssetIds(
+  ch: LongVideoCharacter,
+  order: CharacterIdentityAngle[] = CHARACTER_IDENTITY_CORE_ANGLES,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const angle of order) {
+    const id = identityViewAssetId(ch, angle);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function seedFrontFromLooks(ch: LongVideoCharacter): string | undefined {
+  const def = ch.looks.find((lk) => lk.id === ch.default_look_id);
+  const fromDef = lookWardrobeRefId(def) ?? def?.reference_asset_id?.trim();
+  if (fromDef) return fromDef;
+  for (const lk of ch.looks) {
+    const id = lookWardrobeRefId(lk) ?? lk.reference_asset_id?.trim();
+    if (id) return id;
+  }
+  return undefined;
+}
+
+/** Migrate legacy look.reference_asset_id → identity front + wardrobe_ref; ensure angle slots. */
+export function normalizeCharacterIdentity(ch: LongVideoCharacter): LongVideoCharacter {
+  const looks = ch.looks.map((lk) => {
+    const wardrobe = lk.wardrobe_ref_asset_id?.trim() || lk.reference_asset_id?.trim() || undefined;
+    if (wardrobe === lk.wardrobe_ref_asset_id && lk.reference_asset_id === undefined) return lk;
+    return {
+      ...lk,
+      wardrobe_ref_asset_id: wardrobe,
+      // Keep legacy field populated for one release so older UI paths still resolve.
+      reference_asset_id: lk.reference_asset_id?.trim() || wardrobe,
+    };
+  });
+
+  const existing = ch.identity_sheet;
+  const byAngle = new Map<CharacterIdentityAngle, CharacterIdentityView>();
+  for (const v of existing?.views ?? []) {
+    byAngle.set(v.angle, { ...v, asset_id: v.asset_id?.trim() || undefined });
+  }
+  let front = byAngle.get('front');
+  if (!front?.asset_id) {
+    const seeded = seedFrontFromLooks({ ...ch, looks });
+    if (seeded) {
+      front = { angle: 'front', asset_id: seeded, prompt: front?.prompt };
+      byAngle.set('front', front);
+    }
+  }
+  const views = CHARACTER_IDENTITY_ANGLES.map((angle) => byAngle.get(angle) ?? { angle });
+  const identity_sheet: CharacterIdentitySheet = {
+    master_angle: 'front',
+    views,
+  };
+
+  return { ...ch, looks, identity_sheet };
+}
+
+export function normalizeCharacterRoster(characters: LongVideoCharacter[]): LongVideoCharacter[] {
+  return characters.map(normalizeCharacterIdentity);
+}
+
+export function patchIdentityView(
+  ch: LongVideoCharacter,
+  angle: CharacterIdentityAngle,
+  patch: { asset_id?: string | null; prompt?: string | null },
+): LongVideoCharacter {
+  const base = normalizeCharacterIdentity(ch);
+  const views = base.identity_sheet!.views.map((v) => {
+    if (v.angle !== angle) return v;
+    const next: CharacterIdentityView = { ...v };
+    if (patch.asset_id === null) delete next.asset_id;
+    else if (patch.asset_id !== undefined) next.asset_id = patch.asset_id;
+    if (patch.prompt === null) delete next.prompt;
+    else if (patch.prompt !== undefined) next.prompt = patch.prompt;
+    return next;
+  });
+  return { ...base, identity_sheet: { master_angle: 'front', views } };
+}
 
 /** Landscape reference size for scene / set-piece images. */
 export const SCENE_REFERENCE_SIZE = { width: 1280, height: 704 } as const;
@@ -646,6 +781,7 @@ export function canGenerateSegmentShot(
 
 export type ProductionBlockerCode =
   | 'missing_cast_reference'
+  | 'missing_wardrobe_reference'
   | 'missing_scene_reference'
   | 'missing_keyframe'
   | 'segment_failed'
@@ -658,13 +794,16 @@ export function productionBlockers(
   roster: { characters: LongVideoCharacter[]; scenes: LongVideoScene[] },
 ): ProductionBlockerCode[] {
   const codes = new Set<ProductionBlockerCode>();
-  const chars = roster.characters;
+  const chars = normalizeCharacterRoster(roster.characters);
   const scenes = roster.scenes;
 
   for (const ch of chars) {
+    if ((ch.name.trim() || ch.visual_identity?.trim()) && !identityFrontAssetId(ch)) {
+      codes.add('missing_cast_reference');
+    }
     for (const lk of ch.looks) {
-      if ((lk.body.trim() || ch.name.trim()) && !lk.reference_asset_id) {
-        codes.add('missing_cast_reference');
+      if ((lk.body.trim() || ch.name.trim()) && !lookWardrobeRefId(lk)) {
+        codes.add('missing_wardrobe_reference');
         break;
       }
     }
@@ -725,7 +864,7 @@ export function buildWorkspaceSnapshot(
   return {
     episode,
     series: series ?? null,
-    characters: roster.characters,
+    characters: normalizeCharacterRoster(roster.characters),
     scenes: roster.scenes,
     style_anchor: (series?.style_anchor ?? episode.style_anchor ?? '').trim(),
     revisions: workspaceRosterRevisions(episode, series ?? null),
@@ -740,15 +879,27 @@ export function collectKeyframeReferenceBindings(
 ): { identity: string[]; wardrobe: string[]; style?: string } {
   const identity: string[] = [];
   const wardrobe: string[] = [];
-  const seen = new Set<string>();
-  for (const cl of resolveShotCastLooks(characters, castLooks, matchText)) {
-    const ch = characters.find((c) => c.id === cl.character_id);
-    const look = ch?.looks.find((l) => l.id === cl.look_id);
-    const refId = look?.reference_asset_id?.trim();
-    if (!refId || seen.has(refId)) continue;
-    seen.add(refId);
-    if (scope === 'wardrobe') wardrobe.push(refId);
-    else if (scope === 'face') identity.push(refId);
+  const seenIdentity = new Set<string>();
+  const seenWardrobe = new Set<string>();
+  if (scope === 'none') return { identity, wardrobe };
+
+  const roster = normalizeCharacterRoster(characters);
+  for (const cl of resolveShotCastLooks(roster, castLooks, matchText)) {
+    const ch = roster.find((c) => c.id === cl.character_id);
+    if (!ch) continue;
+    // Identity sheet views (front first, then core angles).
+    for (const id of collectIdentityAssetIds(ch)) {
+      if (seenIdentity.has(id)) continue;
+      seenIdentity.add(id);
+      identity.push(id);
+    }
+    // Wardrobe ref for the bound look (face and wardrobe scopes both take outfit lock).
+    const look = ch.looks.find((l) => l.id === cl.look_id);
+    const wId = lookWardrobeRefId(look);
+    if (wId && !seenWardrobe.has(wId) && !seenIdentity.has(wId)) {
+      seenWardrobe.add(wId);
+      wardrobe.push(wId);
+    }
   }
   return { identity, wardrobe };
 }
@@ -860,12 +1011,15 @@ export function buildSegmentReferenceBindings(
   }
 
   if (chainMode === 'reference_r2v' || chainMode === 'first_last') {
-    for (const id of collectCastReferenceAssetIdsForShot(
-      characters.length ? characters : lv.characters ?? [],
-      shot.cast_looks ?? [],
-      shotCastMatchText(shot),
-    )) {
-      push(id, 'identity');
+    const roster = normalizeCharacterRoster(characters.length ? characters : lv.characters ?? []);
+    for (const cl of resolveShotCastLooks(roster, shot.cast_looks ?? [], shotCastMatchText(shot))) {
+      const ch = roster.find((c) => c.id === cl.character_id);
+      if (!ch) continue;
+      for (const id of collectIdentityAssetIds(ch)) {
+        push(id, 'identity');
+      }
+      const wId = lookWardrobeRefId(ch.looks.find((l) => l.id === cl.look_id));
+      push(wId, 'wardrobe');
     }
   }
   return out;
@@ -873,6 +1027,7 @@ export function buildSegmentReferenceBindings(
 
 export const PRODUCTION_BLOCKER_LABEL_KEYS: Record<ProductionBlockerCode, string> = {
   missing_cast_reference: 'video.longVideoBlockerMissingCastRef',
+  missing_wardrobe_reference: 'video.longVideoBlockerMissingWardrobeRef',
   missing_scene_reference: 'video.longVideoBlockerMissingSceneRef',
   missing_keyframe: 'video.longVideoBlockerMissingKeyframe',
   segment_failed: 'video.longVideoBlockerSegmentFailed',
@@ -912,11 +1067,17 @@ export function episodeDeliveryChecklist(
     }
   }
   let castRefsOk = true;
+  const normChars = normalizeCharacterRoster(roster.characters);
   for (const clKey of castLookIds) {
     const [cid, lid] = clKey.split(':');
-    const ch = roster.characters.find((c) => c.id === cid);
-    const lk = ch?.looks.find((l) => l.id === lid);
-    if (lk && (lk.body.trim() || ch?.name.trim()) && !lk.reference_asset_id) {
+    const ch = normChars.find((c) => c.id === cid);
+    if (!ch) continue;
+    const lk = ch.looks.find((l) => l.id === lid);
+    if (!identityFrontAssetId(ch)) {
+      castRefsOk = false;
+      break;
+    }
+    if (lk && (lk.body.trim() || ch.name.trim()) && !lookWardrobeRefId(lk)) {
       castRefsOk = false;
       break;
     }
@@ -1008,15 +1169,20 @@ export const KEYFRAME_REF_DIVIDER = '---';
 /** Markdown section headings for T2I keyframe prompts (generation-time only). */
 export const KEYFRAME_MD_SCENE_ZH = '场景';
 export const KEYFRAME_MD_SCENE_EN = 'Scene';
-export const KEYFRAME_MD_CAST_ZH = '角色定妆';
-export const KEYFRAME_MD_CAST_EN = 'Cast reference';
+export const KEYFRAME_MD_CAST_ZH = '角色身份';
+export const KEYFRAME_MD_CAST_EN = 'Character identity';
 export const KEYFRAME_MD_SCENE_SET_ZH = '场景设定';
 export const KEYFRAME_MD_SCENE_SET_EN = 'Set reference';
 export const KEYFRAME_MD_STYLE_ZH = '画风';
 export const KEYFRAME_MD_STYLE_EN = 'Style';
 
 const KEYFRAME_MD_SCENE_HEADINGS = [KEYFRAME_MD_SCENE_ZH, KEYFRAME_MD_SCENE_EN];
-const KEYFRAME_MD_CAST_HEADINGS = [KEYFRAME_MD_CAST_ZH, KEYFRAME_MD_CAST_EN];
+const KEYFRAME_MD_CAST_HEADINGS = [
+  KEYFRAME_MD_CAST_ZH,
+  KEYFRAME_MD_CAST_EN,
+  '角色定妆',
+  'Cast reference',
+];
 const KEYFRAME_MD_STYLE_HEADINGS = [KEYFRAME_MD_STYLE_ZH, KEYFRAME_MD_STYLE_EN];
 
 function extractMarkdownSection(text: string, headings: string[]): string {
@@ -1058,7 +1224,7 @@ function normalizeSceneLine(rawScene: string, locale: 'zh' | 'en'): string {
 function keyframeSceneComposeNote(locale: 'zh' | 'en', scope: CastReferenceScope): string {
   if (scope === 'wardrobe') {
     return locale === 'zh'
-      ? '短剧静帧：景别、站位与可见动作优先；仅服饰/配色与定妆一致，本帧不要求清晰面部。少写氛围形容词。'
+      ? '短剧静帧：景别、站位与可见动作优先；仅服饰/配色与身份参考一致，本帧不要求清晰面部。少写氛围形容词。'
       : 'Short-drama still: prioritize shot size, blocking, and visible action; match outfit palette only—no readable face. Avoid mood fluff.';
   }
   if (scope === 'none') {
@@ -1067,7 +1233,7 @@ function keyframeSceneComposeNote(locale: 'zh' | 'en', scope: CastReferenceScope
       : 'Short-drama still: prioritize shot size and visible props; no characters. Avoid mood fluff.';
   }
   return locale === 'zh'
-    ? '短剧静帧：景别、站位与可见动作优先，环境背景完整；仅面部/服饰与定妆一致，勿复制定妆构图或纯色背景。少写「电影感/氛围感」。'
+    ? '短剧静帧：景别、站位与可见动作优先，环境背景完整；仅面部/服饰与身份参考一致，勿复制身份参考构图或纯色背景。少写「电影感/氛围感」。'
     : 'Short-drama still: prioritize shot size, blocking, and visible action with full environment; match cast face/outfit only—no portrait framing or plain backdrop. Avoid cinematic/atmosphere filler.';
 }
 
@@ -1335,7 +1501,7 @@ function anchorBlocksForVisual(scene: string, anchor: string): AnchorBlock[] {
 function isStructuredKeyframeVisual(visual: string): boolean {
   const v = visual.trim();
   if (!v) return false;
-  if (/^##\s+(场景|Scene|角色定妆|Cast reference)/m.test(v)) return true;
+  if (/^##\s+(场景|Scene|角色身份|角色定妆|Character identity|Cast reference)/m.test(v)) return true;
   return v.includes(KEYFRAME_REF_DIVIDER) && (/【本帧】/.test(v) || /\[Shot\]/i.test(v));
 }
 
@@ -1753,7 +1919,7 @@ export function keyframeGenerationPrompt(
 }
 
 export const KEYFRAME_CAST_NEGATIVE_ZH =
-  '单人肖像, 大头照, 证件照, 纯色背景, 站桩, 复制定妆图构图';
+  '单人肖像, 大头照, 证件照, 纯色背景, 站桩, 复制身份参考构图';
 export const KEYFRAME_CAST_NEGATIVE_EN =
   'solo portrait, headshot, id photo, plain background, bust only, copy portrait framing';
 
@@ -2041,14 +2207,15 @@ export function createCharacterEntry(name: string, locale: 'zh' | 'en' = 'zh'): 
   const id = makeCastStableId('char', trimmed);
   const label = locale === 'zh' ? '默认' : 'default';
   const lookId = makeCastStableId('look', `${trimmed}|${label}`);
-  return {
+  return normalizeCharacterIdentity({
     id,
     name: trimmed,
     role: 'supporting',
     default_look_id: lookId,
     looks: [{ id: lookId, label, body: '', look_status: 'draft' }],
     asset_status: 'draft',
-  };
+    identity_sheet: emptyIdentitySheet(),
+  });
 }
 
 export function createLookEntry(
@@ -2215,7 +2382,7 @@ function formatCastOutfitMarkdown(
       return `- **${wardrobeLabel}**：${parts.wardrobe}`;
     }
     return locale === 'zh'
-      ? '- **服饰**：与定妆一致（本帧不可见面部，勿绘制清晰五官）'
+      ? '- **服饰**：与身份/服装参考一致（本帧不可见面部，勿绘制清晰五官）'
       : '- **Wardrobe**: match cast outfit (no readable face in this frame)';
   }
   if (parts.wardrobe) {
@@ -2237,6 +2404,121 @@ export function portraitAppearanceForPrompt(
   return appearance;
 }
 
+function identityTextBits(ch: LongVideoCharacter, locale: 'zh' | 'en'): string {
+  const baseline = (ch.identity_baseline || '').trim();
+  const age = (ch.age_range || '').trim();
+  const gender = (ch.gender_presentation || '').trim();
+  const visual = (ch.visual_identity || ch.identity_notes || '').trim();
+  return [baseline, age, gender, visual].filter(Boolean).join(locale === 'zh' ? '，' : ', ');
+}
+
+/** Master front identity view — face/build only, no episode wardrobe. */
+export function buildIdentityFrontPrompt(
+  ch: LongVideoCharacter,
+  styleAnchor: string,
+  locale: 'zh' | 'en',
+  opts?: { useCache?: boolean },
+): string {
+  if (opts?.useCache !== false) {
+    const cached = identityViewOf(ch.identity_sheet, 'front')?.prompt?.trim();
+    if (cached) return cached;
+  }
+  const style = styleAnchor.trim().slice(0, 120);
+  const bits = identityTextBits(ch, locale);
+  if (locale === 'zh') {
+    return (
+      `【身份主视图】单人角色身份参考，仅一名角色，正面朝向镜头，中性表情，头肩至半身，` +
+      `纯色或简洁背景，清晰面部与发型体型，不要描写具体剧情服装细节，不含剧情动作。` +
+      `角色：${ch.name}` +
+      (bits ? `，${bits}` : '') +
+      `。` +
+      (style ? `画风：${style}。` : '')
+    );
+  }
+  return (
+    `[Identity front] solo character identity reference, single person, facing camera, neutral expression, ` +
+    `head-to-waist, plain background, clear face hair and build, no episode wardrobe detail, no action. ` +
+    `Character: ${ch.name}` +
+    (bits ? `, ${bits}` : '') +
+    `. ` +
+    (style ? `Style: ${style}.` : '')
+  );
+}
+
+const IDENTITY_ANGLE_PROMPT_ZH: Record<CharacterIdentityAngle, string> = {
+  front: '正面朝向镜头',
+  three_quarter: '四分之三侧面（约45度）',
+  profile: '正侧面硬轮廓（约90度）',
+  back: '背面，可见后脑与肩背',
+  full_body: '全身站立正面，从头到脚',
+};
+
+const IDENTITY_ANGLE_PROMPT_EN: Record<CharacterIdentityAngle, string> = {
+  front: 'front view facing camera',
+  three_quarter: 'three-quarter view about 45 degrees',
+  profile: 'hard profile about 90 degrees',
+  back: 'rear view showing back of head and shoulders',
+  full_body: 'full-body standing front view head to toe',
+};
+
+/** Other identity angles — conditioned on front reference image. */
+export function buildIdentityAnglePrompt(
+  ch: LongVideoCharacter,
+  angle: CharacterIdentityAngle,
+  styleAnchor: string,
+  locale: 'zh' | 'en',
+): string {
+  const style = styleAnchor.trim().slice(0, 120);
+  const bits = identityTextBits(ch, locale);
+  const angleLine = locale === 'zh' ? IDENTITY_ANGLE_PROMPT_ZH[angle] : IDENTITY_ANGLE_PROMPT_EN[angle];
+  if (locale === 'zh') {
+    return (
+      `【身份视图·${angle}】与参考图为同一人，${angleLine}，单人，中性表情，` +
+      `纯色或简洁背景，锁住面部发型体型，不要换脸或改发色，不含剧情动作。` +
+      `角色：${ch.name}` +
+      (bits ? `，${bits}` : '') +
+      `。` +
+      (style ? `画风：${style}。` : '')
+    );
+  }
+  return (
+    `[Identity ${angle}] same person as the reference image, ${angleLine}, solo, neutral expression, ` +
+    `plain background, lock face hair build, do not change identity, no action. ` +
+    `Character: ${ch.name}` +
+    (bits ? `, ${bits}` : '') +
+    `. ` +
+    (style ? `Style: ${style}.` : '')
+  );
+}
+
+/** Wardrobe reference for one look — same person as identity refs + outfit lock. */
+export function buildWardrobeRefPrompt(
+  ch: LongVideoCharacter,
+  look: LongVideoCharacterLook,
+  styleAnchor: string,
+  locale: 'zh' | 'en',
+): string {
+  const style = styleAnchor.trim().slice(0, 120);
+  const { appearance, wardrobe } = characterLookOutfitParts(ch, look, []);
+  const outfit = [wardrobe, look.body.trim()].filter(Boolean).join(locale === 'zh' ? '，' : ', ')
+    || appearance;
+  if (locale === 'zh') {
+    return (
+      `【服装参考】与参考图为同一人，全身或半身服装设定，中性站姿，纯色或简洁背景，` +
+      `清晰展示本套服装剪影与细节，不含剧情动作。` +
+      `角色：${ch.name}（${look.label}）。服装：${outfit}。` +
+      (style ? `画风：${style}。` : '')
+    );
+  }
+  return (
+    `[Wardrobe reference] same person as the reference image, full or half-body costume lock, ` +
+    `neutral stance, plain background, clear outfit silhouette and detail, no action. ` +
+    `Character: ${ch.name} (${look.label}). Outfit: ${outfit}. ` +
+    (style ? `Style: ${style}.` : '')
+  );
+}
+
+/** @deprecated Use buildIdentityFrontPrompt / buildWardrobeRefPrompt. */
 export function buildPortraitPrompt(
   ch: LongVideoCharacter,
   look: LongVideoCharacterLook,
@@ -2244,34 +2526,12 @@ export function buildPortraitPrompt(
   locale: 'zh' | 'en',
   opts?: { otherCharacterNames?: string[]; useCache?: boolean },
 ): string {
+  void opts?.otherCharacterNames;
   if (opts?.useCache !== false) {
     const cached = look.portrait_prompt?.trim();
     if (cached) return cached;
   }
-  const appearance = portraitAppearanceForPrompt(ch, look, opts?.otherCharacterNames ?? []);
-  const style = styleAnchor.trim().slice(0, 120);
-  const baseline = (ch.identity_baseline || '').trim();
-  const age = (ch.age_range || '').trim();
-  const gender = (ch.gender_presentation || '').trim();
-  const identityBits = [baseline, age, gender].filter(Boolean).join(locale === 'zh' ? '，' : ', ');
-  if (locale === 'zh') {
-    return (
-      `【定妆】单人角色设定参考，仅一名角色，无其他人物，中性表情，头肩至半身，` +
-      `纯色或简洁背景，清晰面部与服饰，不含剧情动作。` +
-      `角色：${ch.name}（${look.label}）` +
-      (identityBits ? `，${identityBits}` : '') +
-      `。外貌：${appearance}。` +
-      (style ? `画风：${style}。` : '')
-    );
-  }
-  return (
-    `[Portrait] solo character reference, single person only, neutral expression, head-to-waist, ` +
-    `plain background, clear face and outfit, no action or story scene. ` +
-    `Character: ${ch.name} (${look.label})` +
-    (identityBits ? `, ${identityBits}` : '') +
-    `. Appearance: ${appearance}. ` +
-    (style ? `Style: ${style}.` : '')
-  );
+  return buildWardrobeRefPrompt(ch, look, styleAnchor, locale);
 }
 
 export function resolvePrimaryCastPortraitForShot(
@@ -2279,21 +2539,32 @@ export function resolvePrimaryCastPortraitForShot(
   castLooks: LongVideoShotCastLook[],
   sceneText: string,
 ): { character_id: string; look_id: string; reference_asset_id: string } | null {
-  const resolved = resolveShotCastLooks(characters, castLooks, sceneText);
-  const onScreen = charactersOnScreen(sceneText, characters);
+  const roster = normalizeCharacterRoster(characters);
+  const resolved = resolveShotCastLooks(roster, castLooks, sceneText);
+  const onScreen = charactersOnScreen(sceneText, roster);
   const ordered = onScreen.length
     ? onScreen
         .map((ch) => resolved.find((r) => r.character_id === ch.id))
         .filter((r): r is LongVideoShotCastLook => Boolean(r))
     : resolved;
   for (const cl of ordered) {
-    const ch = characters.find((c) => c.id === cl.character_id);
-    const look = ch?.looks.find((l) => l.id === cl.look_id);
-    if (look?.reference_asset_id) {
+    const ch = roster.find((c) => c.id === cl.character_id);
+    if (!ch) continue;
+    const front = identityFrontAssetId(ch);
+    if (front) {
       return {
         character_id: cl.character_id,
         look_id: cl.look_id,
-        reference_asset_id: look.reference_asset_id,
+        reference_asset_id: front,
+      };
+    }
+    const look = ch.looks.find((l) => l.id === cl.look_id);
+    const wId = lookWardrobeRefId(look);
+    if (wId) {
+      return {
+        character_id: cl.character_id,
+        look_id: cl.look_id,
+        reference_asset_id: wId,
       };
     }
   }
@@ -2307,13 +2578,19 @@ export function collectCastReferenceAssetIdsForShot(
 ): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
-  for (const cl of resolveShotCastLooks(characters, castLooks, sceneText)) {
-    const ch = characters.find((c) => c.id === cl.character_id);
-    const look = ch?.looks.find((l) => l.id === cl.look_id);
-    const refId = look?.reference_asset_id;
-    if (refId && !seen.has(refId)) {
-      ids.push(refId);
-      seen.add(refId);
+  const roster = normalizeCharacterRoster(characters);
+  for (const cl of resolveShotCastLooks(roster, castLooks, sceneText)) {
+    const ch = roster.find((c) => c.id === cl.character_id);
+    if (!ch) continue;
+    for (const id of collectIdentityAssetIds(ch)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    const wId = lookWardrobeRefId(ch.looks.find((l) => l.id === cl.look_id));
+    if (wId && !seen.has(wId)) {
+      seen.add(wId);
+      ids.push(wId);
     }
   }
   return ids;
@@ -2342,16 +2619,30 @@ export function mergeKeyframeLoraAdapters(
   return [...merged.entries()].map(([id, weight]) => ({ id, weight }));
 }
 
+/** Looks missing a wardrobe reference image. */
 export function looksMissingPortrait(
   characters: LongVideoCharacter[],
 ): Array<{ characterIndex: number; lookIndex: number }> {
   const missing: Array<{ characterIndex: number; lookIndex: number }> = [];
-  characters.forEach((ch, characterIndex) => {
+  normalizeCharacterRoster(characters).forEach((ch, characterIndex) => {
     ch.looks.forEach((lk, lookIndex) => {
-      if (!lk.reference_asset_id && (lk.body.trim() || ch.name.trim())) {
+      if (!lookWardrobeRefId(lk) && (lk.body.trim() || ch.name.trim())) {
         missing.push({ characterIndex, lookIndex });
       }
     });
+  });
+  return missing;
+}
+
+/** Characters missing identity front view. */
+export function charactersMissingIdentityFront(
+  characters: LongVideoCharacter[],
+): number[] {
+  const missing: number[] = [];
+  normalizeCharacterRoster(characters).forEach((ch, characterIndex) => {
+    if ((ch.name.trim() || ch.visual_identity?.trim()) && !identityFrontAssetId(ch)) {
+      missing.push(characterIndex);
+    }
   });
   return missing;
 }
@@ -2361,13 +2652,39 @@ function mergeCharacterLook(
   incoming: LongVideoCharacterLook,
 ): LongVideoCharacterLook {
   if (!existing) return { ...incoming };
+  const wardrobe =
+    existing.wardrobe_ref_asset_id
+    ?? incoming.wardrobe_ref_asset_id
+    ?? existing.reference_asset_id
+    ?? incoming.reference_asset_id;
   return {
     ...incoming,
-    reference_asset_id: existing.reference_asset_id ?? incoming.reference_asset_id,
+    wardrobe_ref_asset_id: wardrobe,
+    reference_asset_id: existing.reference_asset_id ?? incoming.reference_asset_id ?? wardrobe,
     lora_id: existing.lora_id ?? incoming.lora_id,
     portrait_prompt: existing.portrait_prompt ?? incoming.portrait_prompt,
     vision_description: existing.vision_description ?? incoming.vision_description,
     body: incoming.body.trim() ? incoming.body : existing.body,
+  };
+}
+
+function mergeIdentitySheet(
+  existing: CharacterIdentitySheet | undefined,
+  incoming: CharacterIdentitySheet | undefined,
+): CharacterIdentitySheet | undefined {
+  if (!existing && !incoming) return undefined;
+  const a = existing ? normalizeCharacterIdentity({ id: '', name: '', looks: [], default_look_id: '', identity_sheet: existing }).identity_sheet : undefined;
+  const b = incoming ? normalizeCharacterIdentity({ id: '', name: '', looks: [], default_look_id: '', identity_sheet: incoming }).identity_sheet : undefined;
+  const byAngle = new Map<CharacterIdentityAngle, CharacterIdentityView>();
+  for (const v of b?.views ?? []) byAngle.set(v.angle, { ...v });
+  for (const v of a?.views ?? []) {
+    const cur = byAngle.get(v.angle);
+    if (!cur?.asset_id && v.asset_id) byAngle.set(v.angle, { ...cur, ...v, angle: v.angle });
+    else if (!cur) byAngle.set(v.angle, { ...v });
+  }
+  return {
+    master_angle: 'front',
+    views: CHARACTER_IDENTITY_ANGLES.map((angle) => byAngle.get(angle) ?? { angle }),
   };
 }
 
@@ -2415,7 +2732,7 @@ export function mergeCharacterRosters(
       if (prev.aliases?.length) return prev.aliases;
       return undefined;
     };
-    return {
+    return normalizeCharacterIdentity({
       ...inc,
       name: inc.name.trim() || prev.name,
       role: inc.role || prev.role,
@@ -2427,11 +2744,12 @@ export function mergeCharacterRosters(
       voice_manner: pickStr(inc.voice_manner, prev.voice_manner),
       performance_notes: pickStr(inc.performance_notes, prev.performance_notes),
       identity_notes: pickStr(inc.identity_notes, prev.identity_notes),
+      identity_sheet: mergeIdentitySheet(prev.identity_sheet, inc.identity_sheet),
       looks,
       default_look_id: defaultLookId,
       library_entity_id: prev.library_entity_id ?? inc.library_entity_id,
       library_version: prev.library_version ?? inc.library_version,
-    };
+    });
   });
 
   for (const ch of existing) {
@@ -2439,9 +2757,9 @@ export function mergeCharacterRosters(
     const matched = merged.some(
       (inc) => inc.id === ch.id || (key && inc.name.trim().toLowerCase() === key),
     );
-    if (!matched) merged.push(ch);
+    if (!matched) merged.push(normalizeCharacterIdentity(ch));
   }
-  return merged;
+  return normalizeCharacterRoster(merged);
 }
 
 function normalizeLocationKey(text: string): string {

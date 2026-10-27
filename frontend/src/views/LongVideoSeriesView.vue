@@ -73,12 +73,28 @@
           :library-publishing="libraryBusyKind === 'character-publish'"
           :library-saving="libraryBusyKind === 'character-save'"
           :library-switching="libraryBusyKind === 'character-switch'"
+          :portrait-generating-key="portraitGeneratingKey"
+          :batch-generating="batchGenerating"
           @update:characters="onSeriesCharacters"
           @switch-library-version="onSwitchCharacterLibraryVersion"
           @save-draft="onSaveCharacterDraft"
           @finalize-asset="onFinalizeCharacter"
           @finalize-look="onFinalizeCharacterLook"
           @fork-draft="onForkCharacterDraft"
+          @generate-identity-front="generateIdentityFront"
+          @generate-identity-angle="generateIdentityAngle"
+          @pick-identity-gallery="onPickIdentityGallery"
+          @clear-identity-view="onClearIdentityView"
+          @generate-portrait="generateWardrobeRef"
+          @clear-portrait="clearWardrobeRef"
+        />
+        <LongVideoStepSaveBar
+          :save-label="$tt('video.longVideoSeriesSaveSettings')"
+          :hint="$tt('video.longVideoSaveStepCastHint')"
+          status=""
+          status-label=""
+          :loading="saving"
+          @save="saveSeries"
         />
       </div>
 
@@ -200,7 +216,15 @@ import { useRoute, useRouter } from 'vue-router';
 import { toast, confirm } from '@/utils/feedback';
 import { api, isRevisionConflictError } from '@/utils/api';
 import { $tt } from '@/utils/i18n';
-import type { LibraryEntityVersion, LongVideoCharacter, LongVideoScene, LongVideoSeriesDetail, LongVideoSeriesEpisodeSummary, LongVideoSeriesState } from '@/types';
+import type {
+  CharacterIdentityAngle,
+  LibraryEntityVersion,
+  LongVideoCharacter,
+  LongVideoScene,
+  LongVideoSeriesDetail,
+  LongVideoSeriesEpisodeSummary,
+  LongVideoSeriesState,
+} from '@/types';
 import { defaultSeriesState, newStableId } from '@/utils/longVideoSeries';
 import {
   characterAssetStatus,
@@ -225,6 +249,7 @@ import LongVideoCastPanel from '@/components/long-video/LongVideoCastPanel.vue';
 import LongVideoScenePanel from '@/components/long-video/LongVideoScenePanel.vue';
 import LongVideoSettingsPanel from '@/components/long-video/LongVideoSettingsPanel.vue';
 import LongVideoStepSaveBar from '@/components/long-video/LongVideoStepSaveBar.vue';
+import { useCastIdentityGeneration } from '@/composables/useCastIdentityGeneration';
 import { useLongVideoRegistry } from '@/composables/useLongVideoRegistry';
 import { resolveScriptText } from '@/utils/longVideoProject';
 
@@ -310,6 +335,50 @@ function onSeriesCharacters(characters: LongVideoCharacter[]) {
 
 function onSeriesScenes(scenes: LongVideoScene[]) {
   patchSeriesField('scenes', scenes);
+}
+
+async function persistSeriesQuiet() {
+  const s = series.value;
+  if (!s) return;
+  const saved = await api.longVideo.updateSeries(s.id, {
+    title: seriesTitle.value.trim() || s.title,
+    state: s.state,
+  });
+  series.value = { ...saved, state: defaultSeriesState(saved.state ?? {}) };
+  seriesTitle.value = saved.title;
+}
+
+const {
+  portraitGeneratingKey,
+  batchGenerating,
+  generateIdentityFront,
+  generateIdentityAngle,
+  clearIdentityView,
+  generateWardrobeRef,
+  clearWardrobeRef,
+} = useCastIdentityGeneration({
+  getCharacters: () => seriesState.value.characters ?? [],
+  setCharacters: (next) => onSeriesCharacters(next),
+  getModel: () =>
+    String(
+      seriesState.value.portrait_model
+        || seriesState.value.keyframe_model
+        || defaultKeyframeModel.value
+        || '',
+    ).trim(),
+  getStyleAnchor: () => seriesState.value.style_anchor ?? '',
+  getLocale: () => String(locale.value),
+  getOwnerId: () => seriesId.value,
+  ensureSaved: persistSeriesQuiet,
+  afterSuccess: persistSeriesQuiet,
+});
+
+function onClearIdentityView(ci: number, angle: CharacterIdentityAngle) {
+  clearIdentityView(ci, angle);
+}
+
+function onPickIdentityGallery(_ci: number, _angle: CharacterIdentityAngle) {
+  toast.warning($tt('video.longVideoSeriesIdentityGalleryHint'));
 }
 
 function openEpisode(projectId: string) {

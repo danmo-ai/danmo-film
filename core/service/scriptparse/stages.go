@@ -36,15 +36,20 @@ func emitCheckpoint(on StageProgressFn, pipe *ScriptPipeline, stage string, pct 
 	})
 }
 
-func RunStoryMap(ctx context.Context, llm port.LLMProvider, model string, pipe *ScriptPipeline, on StageProgressFn) (int, error) {
+func RunStoryMap(ctx context.Context, llm port.LLMProvider, model string, pipe *ScriptPipeline, existing *ExistingRoster, on StageProgressFn) (int, error) {
 	emit(on, StageR1, "", "story_map", 10)
 	loc := NormalizeLocale(pipe.Locale)
 	idxLines := make([]string, 0, len(pipe.SceneIndex))
 	for _, sc := range pipe.SceneIndex {
 		idxLines = append(idxLines, fmt.Sprintf("%s %s (L%d–%d)", sc.SceneID, sc.Heading, sc.SourceStartLine, sc.SourceEndLine))
 	}
-	user := fmt.Sprintf("Title: %s\nScene index:\n%s\n\nNumbered script:\n%s\n%s",
-		pipe.Title, strings.Join(idxLines, "\n"), truncRunes(pipe.SourceDocument.NumberedText, 12000), localeBlock(loc))
+	rosterBlock := formatExistingRosterBlock(existing)
+	if rosterBlock == "" {
+		rosterBlock = "(none — create all characters and locations)"
+	}
+	user := fmt.Sprintf("Title: %s\nScene index:\n%s\n\nNumbered script:\n%s\n\n%s\n\n%s",
+		pipe.Title, strings.Join(idxLines, "\n"), truncRunes(pipe.SourceDocument.NumberedText, 12000),
+		rosterBlock, localeBlock(loc))
 	resp, n, err := invokeWithReview(ctx, llm, model, StoryMapSystem, user, tokenBudget(4000), func(s string) (bool, string) {
 		data, err := jsonout.ExtractObject(s)
 		if err != nil {
@@ -85,38 +90,73 @@ func RunStoryMap(ctx context.Context, llm port.LLMProvider, model string, pipe *
 		OpenQuestions: asStrings(data["open_questions"]),
 		ReviewStatus:  ReviewPending,
 	}
+	lookLabel := defaultLookLabel(loc)
 	for _, c := range asMaps(data["characters"]) {
 		name := asString(c["name"])
 		if name == "" {
 			continue
 		}
-		sm.Characters = append(sm.Characters, RegistryCharacter{
-			CharacterID:        stableID("char_", name),
-			Name:               name,
-			Aliases:            asStrings(c["aliases"]),
-			Role:               sanitizeCastRole(asString(c["role"])),
-			Basis:              "explicit",
-			AgeRange:           strings.TrimSpace(asString(c["age_range"])),
-			GenderPresentation: strings.TrimSpace(asString(c["gender_presentation"])),
-			IdentityBaseline:   strings.TrimSpace(asString(c["identity_baseline"])),
-			VisualIdentity:     strings.TrimSpace(asString(c["visual_identity"])),
-			VoiceManner:        strings.TrimSpace(asString(c["voice_manner"])),
-			PerformanceNotes:   strings.TrimSpace(asString(c["performance_notes"])),
-			LookBody:           asString(c["look_body"]),
-			ReviewStatus:       ReviewPending,
-		})
+		dec := sanitizeDecision(asString(c["decision"]))
+		if dec == "" {
+			if strings.TrimSpace(asString(c["existing_character_id"])) != "" {
+				dec = DecisionReuse
+			} else {
+				dec = DecisionCreate
+			}
+		}
+		scope := sanitizeScope(asString(c["scope"]), dec)
+		existID := strings.TrimSpace(asString(c["existing_character_id"]))
+		rc := RegistryCharacter{
+			Decision:            dec,
+			ExistingCharacterID: existID,
+			Scope:               scope,
+			Name:                name,
+			Aliases:             asStrings(c["aliases"]),
+			Role:                sanitizeCastRole(asString(c["role"])),
+			Basis:               "explicit",
+			AgeRange:            strings.TrimSpace(asString(c["age_range"])),
+			GenderPresentation:  strings.TrimSpace(asString(c["gender_presentation"])),
+			IdentityBaseline:    strings.TrimSpace(asString(c["identity_baseline"])),
+			VisualIdentity:      strings.TrimSpace(asString(c["visual_identity"])),
+			VoiceManner:         strings.TrimSpace(asString(c["voice_manner"])),
+			PerformanceNotes:    strings.TrimSpace(asString(c["performance_notes"])),
+			LookBody:            asString(c["look_body"]),
+			ReviewStatus:        ReviewPending,
+		}
+		rc.CharacterID = resolveCharacterID(rc, name)
+		prefix := rc.CharacterID + "_look_"
+		rc.Looks = parseRegistryLooks(asMaps(c["looks"]), rc.LookBody, lookLabel, prefix)
+		normalizeCharacterLooks(&rc, loc)
+		sm.Characters = append(sm.Characters, rc)
 	}
 	for _, locn := range asMaps(data["locations"]) {
 		name := asString(locn["name"])
 		if name == "" {
 			continue
 		}
-		sm.Locations = append(sm.Locations, RegistryLocation{
-			LocationID:   stableID("loc_", name),
-			Name:         name,
-			Body:         asString(locn["body"]),
-			ReviewStatus: ReviewPending,
-		})
+		dec := sanitizeDecision(asString(locn["decision"]))
+		if dec == "" {
+			if strings.TrimSpace(asString(locn["existing_location_id"])) != "" {
+				dec = DecisionReuse
+			} else {
+				dec = DecisionCreate
+			}
+		}
+		scope := sanitizeScope(asString(locn["scope"]), dec)
+		existID := strings.TrimSpace(asString(locn["existing_location_id"]))
+		rl := RegistryLocation{
+			Decision:           dec,
+			ExistingLocationID: existID,
+			Scope:              scope,
+			Name:               name,
+			Body:               asString(locn["body"]),
+			ReviewStatus:       ReviewPending,
+		}
+		rl.LocationID = resolveLocationID(rl, name)
+		prefix := rl.LocationID + "_look_"
+		rl.Looks = parseRegistryLooks(asMaps(locn["looks"]), rl.Body, lookLabel, prefix)
+		normalizeLocationLooks(&rl, loc)
+		sm.Locations = append(sm.Locations, rl)
 	}
 	pipe.StoryMap = sm
 	pipe.EntityRegistry = &EntityRegistry{
@@ -447,7 +487,7 @@ func RunGenPackages(ctx context.Context, llm port.LLMProvider, model string, pip
 	lookByName := map[string]string{}
 	if pipe.EntityRegistry != nil {
 		for _, c := range pipe.EntityRegistry.Characters {
-			lookByName[c.Name] = c.LookBody
+			lookByName[c.Name] = primaryLookBody(c)
 		}
 	}
 	var packs []GenerationPackage
@@ -649,8 +689,8 @@ func formatRegistryChars(reg *EntityRegistry) string {
 		if c.VisualIdentity != "" {
 			parts = append(parts, "face="+c.VisualIdentity)
 		}
-		if c.LookBody != "" {
-			parts = append(parts, "look="+c.LookBody)
+		if look := primaryLookBody(c); look != "" {
+			parts = append(parts, "look="+look)
 		}
 		lines = append(lines, strings.Join(parts, " "))
 	}

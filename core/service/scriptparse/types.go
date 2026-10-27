@@ -93,27 +93,83 @@ type EntityRegistry struct {
 	Props      []RegistryProp      `json:"props,omitempty"`
 }
 
+// DecisionReuse / DecisionCreate are Story Map bind decisions against existing_roster.
+const (
+	DecisionReuse  = "reuse"
+	DecisionCreate = "create"
+	ScopeSeries    = "series"
+	ScopeEpisode   = "episode"
+)
+
+// ExistingRoster is the text-only cast/scene catalog passed into Story Map.
+type ExistingRoster struct {
+	Characters []ExistingCharacter `json:"characters,omitempty"`
+	Scenes     []ExistingScene     `json:"scenes,omitempty"`
+}
+
+type ExistingCharacter struct {
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Aliases          []string       `json:"aliases,omitempty"`
+	VisualIdentity   string         `json:"visual_identity,omitempty"`
+	IdentityBaseline string         `json:"identity_baseline,omitempty"`
+	Looks            []ExistingLook `json:"looks,omitempty"`
+}
+
+type ExistingScene struct {
+	ID    string         `json:"id"`
+	Name  string         `json:"name"`
+	Looks []ExistingLook `json:"looks,omitempty"`
+}
+
+type ExistingLook struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+	Body  string `json:"body,omitempty"`
+}
+
+// RegistryLook is one wardrobe (character) or environment (location) look from Story Map.
+type RegistryLook struct {
+	LookID         string `json:"look_id,omitempty"`
+	Decision       string `json:"decision,omitempty"` // reuse|create
+	ExistingLookID string `json:"existing_look_id,omitempty"`
+	Scope          string `json:"scope,omitempty"` // series|episode
+	Label          string `json:"label,omitempty"`
+	Hair           string `json:"hair,omitempty"`
+	Wardrobe       string `json:"wardrobe,omitempty"`
+	Accessories    string `json:"accessories,omitempty"`
+	Body           string `json:"body,omitempty"` // location env; also composed character body
+}
+
 type RegistryCharacter struct {
-	CharacterID        string   `json:"character_id"`
-	Name               string   `json:"name"`
-	Aliases            []string `json:"aliases,omitempty"`
-	Role               string   `json:"role,omitempty"` // protagonist|supporting|extra
-	Basis              string   `json:"basis,omitempty"`
-	AgeRange           string   `json:"age_range,omitempty"`
-	GenderPresentation string   `json:"gender_presentation,omitempty"`
-	IdentityBaseline   string   `json:"identity_baseline,omitempty"`
-	VisualIdentity     string   `json:"visual_identity,omitempty"`
-	VoiceManner        string   `json:"voice_manner,omitempty"`
-	PerformanceNotes   string   `json:"performance_notes,omitempty"`
-	LookBody           string   `json:"look_body,omitempty"` // wardrobe / hair / accessories only
-	ReviewStatus       string   `json:"review_status,omitempty"`
+	CharacterID         string         `json:"character_id"`
+	Decision            string         `json:"decision,omitempty"` // reuse|create
+	ExistingCharacterID string         `json:"existing_character_id,omitempty"`
+	Scope               string         `json:"scope,omitempty"` // series|episode
+	Name                string         `json:"name"`
+	Aliases             []string       `json:"aliases,omitempty"`
+	Role                string         `json:"role,omitempty"` // protagonist|supporting|extra
+	Basis               string         `json:"basis,omitempty"`
+	AgeRange            string         `json:"age_range,omitempty"`
+	GenderPresentation  string         `json:"gender_presentation,omitempty"`
+	IdentityBaseline    string         `json:"identity_baseline,omitempty"`
+	VisualIdentity      string         `json:"visual_identity,omitempty"`
+	VoiceManner         string         `json:"voice_manner,omitempty"`
+	PerformanceNotes    string         `json:"performance_notes,omitempty"`
+	Looks               []RegistryLook `json:"looks,omitempty"`
+	LookBody            string         `json:"look_body,omitempty"` // legacy flat; migrated into Looks
+	ReviewStatus        string         `json:"review_status,omitempty"`
 }
 
 type RegistryLocation struct {
-	LocationID   string `json:"location_id"`
-	Name         string `json:"name"`
-	Body         string `json:"body,omitempty"`
-	ReviewStatus string `json:"review_status,omitempty"`
+	LocationID         string         `json:"location_id"`
+	Decision           string         `json:"decision,omitempty"`
+	ExistingLocationID string         `json:"existing_location_id,omitempty"`
+	Scope              string         `json:"scope,omitempty"`
+	Name               string         `json:"name"`
+	Looks              []RegistryLook `json:"looks,omitempty"`
+	Body               string         `json:"body,omitempty"` // legacy flat env
+	ReviewStatus       string         `json:"review_status,omitempty"`
 }
 
 type RegistryProp struct {

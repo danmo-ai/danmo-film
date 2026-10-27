@@ -181,14 +181,41 @@ func (p *DashScopeProvider) CreateImage(ctx context.Context, body map[string]any
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("dashscope API key not configured")
 	}
-	model := first(strVal(body["model"]), "qwen-image-3.0-pro")
-	prompt := strVal(body["prompt"])
-	if prompt == "" {
-		return nil, fmt.Errorf("prompt is required")
+	req, err := ParseImageRequest(body)
+	if err != nil {
+		return nil, err
 	}
-	size := dashImageSize(strVal(body["size"]))
-	if dashUsesMultimodalImage(model) {
-		return p.createImageMultimodal(ctx, model, prompt, size)
+	model := first(req.Model, "qwen-image-3.0-pro")
+	prompt := req.Prompt
+	size := dashImageSize(req.Size)
+	refs := filterNonEmptyURLs(req.ReferenceImages)
+	if req.SourceID != "" {
+		// Ensure source participates as a reference for i2i/edit.
+		found := false
+		for _, r := range refs {
+			if r == req.SourceID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			refs = append([]string{req.SourceID}, refs...)
+		}
+	}
+	switch req.Mode {
+	case port.ImageModeT2I:
+		if dashUsesMultimodalImage(model) {
+			return p.createImageMultimodal(ctx, model, prompt, size, nil)
+		}
+	case port.ImageModeI2I, port.ImageModeEdit:
+		if len(refs) == 0 {
+			return nil, fmt.Errorf("dashscope %s requires reference/source image", req.Mode)
+		}
+		return p.createImageMultimodal(ctx, model, prompt, size, refs)
+	case port.ImageModeInpaint:
+		return nil, fmt.Errorf("dashscope image inpaint is not supported via this adapter yet")
+	default:
+		return nil, fmt.Errorf("dashscope unsupported image mode %q", req.Mode)
 	}
 	payload := map[string]any{
 		"model": model,
@@ -244,20 +271,52 @@ func dashImageSize(size string) string {
 	return strings.ReplaceAll(size, "x", "*")
 }
 
-func (p *DashScopeProvider) createImageMultimodal(ctx context.Context, model, prompt, size string) (map[string]any, error) {
+func bodyStringIDs(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		out := make([]string, 0, len(t))
+		for _, s := range t {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, raw := range t {
+			s := strings.TrimSpace(fmt.Sprint(raw))
+			if s != "" && s != "<nil>" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func (p *DashScopeProvider) createImageMultimodal(ctx context.Context, model, prompt, size string, refs []string) (map[string]any, error) {
 	params := map[string]any{"n": 1}
 	if size != "" {
 		params["size"] = size
 	}
+	content := make([]any, 0, len(refs)+1)
+	for _, id := range refs {
+		uri := p.resolveStage(id)
+		if uri == "" {
+			return nil, fmt.Errorf("dashscope reference image %q not staged", id)
+		}
+		content = append(content, map[string]any{"image": uri})
+	}
+	content = append(content, map[string]any{"text": prompt})
 	payload := map[string]any{
 		"model": model,
 		"input": map[string]any{
 			"messages": []any{
 				map[string]any{
-					"role": "user",
-					"content": []any{
-						map[string]any{"text": prompt},
-					},
+					"role":    "user",
+					"content": content,
 				},
 			},
 		},
@@ -313,30 +372,190 @@ func dashMultimodalImageURL(m map[string]any) string {
 }
 
 func (p *DashScopeProvider) CreateVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
-	return p.submitVideo(ctx, body, false)
+	return p.submitVideo(ctx, body)
 }
 
 func (p *DashScopeProvider) EditVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
-	return p.submitVideo(ctx, body, true)
+	return p.submitVideo(ctx, body)
 }
 
-func (p *DashScopeProvider) submitVideo(ctx context.Context, body map[string]any, isEdit bool) (map[string]any, error) {
+func dashVideoResolution(res string) string {
+	r := strings.ToUpper(strings.TrimSpace(res))
+	if r == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(r, "480"), r == "480P":
+		return "480P"
+	case strings.Contains(r, "720"), r == "720P":
+		return "720P"
+	case strings.Contains(r, "1080"), r == "1080P":
+		return "1080P"
+	default:
+		return res
+	}
+}
+
+func filterNonEmptyURLs(urls []string) []string {
+	out := make([]string, 0, len(urls))
+	for _, u := range urls {
+		u = strings.TrimSpace(u)
+		if u != "" {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+func (p *DashScopeProvider) resolveVideoURLs(req *port.VideoRequest) {
+	if req.FirstFrame != "" {
+		req.FirstFrame = p.resolveStage(req.FirstFrame)
+	}
+	if req.LastFrame != "" {
+		req.LastFrame = p.resolveStage(req.LastFrame)
+	}
+	if req.SourceVideo != "" {
+		req.SourceVideo = p.resolveStage(req.SourceVideo)
+	}
+	for i, id := range req.ReferenceImages {
+		req.ReferenceImages[i] = p.resolveStage(id)
+	}
+	for i, id := range req.ReferenceVideos {
+		req.ReferenceVideos[i] = p.resolveStage(id)
+	}
+}
+
+func buildDashV2VMedia(videos, images []string, v2vSlot string) []map[string]any {
+	media := make([]map[string]any, 0, len(videos)+len(images))
+	if strings.EqualFold(strings.TrimSpace(v2vSlot), "first_clip") {
+		media = append(media, map[string]any{"type": "first_clip", "url": videos[0]})
+		return media
+	}
+	for _, u := range videos {
+		media = append(media, map[string]any{"type": "reference_video", "url": u})
+	}
+	for _, u := range images {
+		media = append(media, map[string]any{"type": "reference_image", "url": u})
+	}
+	return media
+}
+
+// buildDashVideoInput maps a normalized VideoRequest onto DashScope input.
+// protocol / v2vSlot come from providers.video_model_params (not model-id heuristics).
+func buildDashVideoInput(model string, req port.VideoRequest, protocol, v2vSlot string) (map[string]any, error) {
+	_ = model
+	input := map[string]any{}
+	if req.Prompt != "" {
+		input["prompt"] = req.Prompt
+	}
+	if np := strings.TrimSpace(req.NegativePrompt); np != "" {
+		input["negative_prompt"] = np
+	}
+
+	switch protocol {
+	case "", "dashscope_img_url":
+		switch req.Mode {
+		case port.VideoModeT2V:
+			return input, nil
+		case port.VideoModeI2V, port.VideoModeFLF:
+			if req.FirstFrame == "" {
+				return nil, fmt.Errorf("dashscope i2v requires source_asset_id")
+			}
+			input["img_url"] = req.FirstFrame
+			return input, nil
+		default:
+			return nil, fmt.Errorf("dashscope protocol %q does not support mode %s (configure video_model_params.protocol=dashscope_media)", protocol, req.Mode)
+		}
+
+	case "dashscope_media":
+		switch req.Mode {
+		case port.VideoModeT2V:
+			return input, nil
+		case port.VideoModeI2V:
+			input["media"] = []map[string]any{{"type": "first_frame", "url": req.FirstFrame}}
+			return input, nil
+		case port.VideoModeFLF:
+			input["media"] = []map[string]any{
+				{"type": "first_frame", "url": req.FirstFrame},
+				{"type": "last_frame", "url": req.LastFrame},
+			}
+			return input, nil
+		case port.VideoModeR2V:
+			refs := filterNonEmptyURLs(req.ReferenceImages)
+			media := make([]map[string]any, 0, len(refs)+len(req.ReferenceVideos))
+			for _, u := range refs {
+				media = append(media, map[string]any{"type": "reference_image", "url": u})
+			}
+			for _, u := range filterNonEmptyURLs(req.ReferenceVideos) {
+				media = append(media, map[string]any{"type": "reference_video", "url": u})
+			}
+			if len(media) == 0 {
+				return nil, fmt.Errorf("dashscope r2v requires reference_asset_ids")
+			}
+			input["media"] = media
+			return input, nil
+		case port.VideoModeV2V:
+			videos := filterNonEmptyURLs(req.ReferenceVideos)
+			if req.SourceVideo != "" {
+				found := false
+				for _, v := range videos {
+					if v == req.SourceVideo {
+						found = true
+						break
+					}
+				}
+				if !found {
+					videos = append([]string{req.SourceVideo}, videos...)
+				}
+			}
+			if len(videos) == 0 {
+				return nil, fmt.Errorf("dashscope v2v requires source_video_asset_id or reference_video_asset_ids")
+			}
+			input["media"] = buildDashV2VMedia(videos, filterNonEmptyURLs(req.ReferenceImages), v2vSlot)
+			return input, nil
+		default:
+			return nil, fmt.Errorf("dashscope unsupported video mode %q", req.Mode)
+		}
+
+	default:
+		return nil, fmt.Errorf("dashscope unknown film_protocol %q", protocol)
+	}
+}
+
+func (p *DashScopeProvider) submitVideo(ctx context.Context, body map[string]any) (map[string]any, error) {
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("dashscope API key not configured")
 	}
-	model := first(strVal(body["model"]), p.model)
-	input := map[string]any{"prompt": strVal(body["prompt"])}
-	img := first(strVal(body["source_asset_id"]), strVal(body["start_asset_id"]))
-	if isEdit {
-		if img == "" {
-			return nil, fmt.Errorf("dashscope i2v requires source_asset_id")
-		}
-		input["img_url"] = p.resolveStage(img)
+	req, err := ParseVideoRequest(body)
+	if err != nil {
+		return nil, err
 	}
-	payload := map[string]any{"model": model, "input": input, "parameters": map[string]any{}}
-	if dur := asFloat(body["duration"]); dur > 0 {
-		payload["parameters"].(map[string]any)["duration"] = dur
+	if req.Model == "" {
+		req.Model = p.model
 	}
+	protocol := filmProtocolFromBody(body)
+	if protocol == "" {
+		return nil, fmt.Errorf("dashscope model %q missing film_protocol (set providers.video_model_params)", req.Model)
+	}
+	p.resolveVideoURLs(&req)
+	input, err := buildDashVideoInput(req.Model, req, protocol, strVal(body["film_v2v_slot"]))
+	if err != nil {
+		return nil, err
+	}
+	params := map[string]any{}
+	if req.DurationSec > 0 {
+		params["duration"] = int(req.DurationSec)
+	}
+	if res := dashVideoResolution(first(req.Resolution, req.Size)); res != "" {
+		params["resolution"] = res
+	}
+	if req.Ratio != "" {
+		params["ratio"] = req.Ratio
+	}
+	if req.Seed != 0 {
+		params["seed"] = req.Seed
+	}
+	payload := map[string]any{"model": req.Model, "input": input, "parameters": params}
 	m, err := p.postJSON(ctx, "/api/v1/services/aigc/video-generation/video-synthesis", payload, true)
 	if err != nil {
 		return nil, err
