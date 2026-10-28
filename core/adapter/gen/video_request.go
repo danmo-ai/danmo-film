@@ -7,7 +7,8 @@ import (
 	"github.com/danmo-ai/danmo-film/core/port"
 )
 
-// ChainModeToVideoMode maps Film long-video chain_mode → port.VideoMode.
+// ChainModeToVideoMode maps Film long-video chain_mode → capability catalog token.
+// Used by UI / capability checks; not read from HTTP body.mode.
 func ChainModeToVideoMode(chainMode string) port.VideoMode {
 	switch strings.ToLower(strings.TrimSpace(chainMode)) {
 	case "reference_r2v":
@@ -25,32 +26,15 @@ func ChainModeToVideoMode(chainMode string) port.VideoMode {
 	}
 }
 
-func videoModeFromBody(body map[string]any) port.VideoMode {
-	if m := port.VideoMode(strings.ToLower(strings.TrimSpace(strVal(body["mode"])))); m != "" {
-		return m
-	}
-	if m := ChainModeToVideoMode(strVal(body["chain_mode"])); m != "" {
-		return m
-	}
-	meta, _ := body["metadata"].(map[string]any)
-	if meta != nil {
-		if m := ChainModeToVideoMode(first(strVal(meta["long_video_chain_mode"]), strVal(meta["chain_mode"]))); m != "" {
-			return m
-		}
-		if m := port.VideoMode(strings.ToLower(strings.TrimSpace(strVal(meta["video_mode"])))); m != "" {
-			return m
-		}
-	}
-	return ""
-}
-
-func inferVideoMode(firstFrame, lastFrame string, refImages, refVideos []string, sourceVideo string) port.VideoMode {
-	hasVideo := sourceVideo != "" || len(refVideos) > 0
-	hasRefs := len(refImages) > 0
-	hasFirst := firstFrame != ""
-	hasLast := lastFrame != ""
+// DeriveVideoMode maps filled media slots → capability catalog token (t2v|i2v|flf|r2v|v2v).
+// Call after ValidateVideoRequest so exclusive groups are already enforced.
+func DeriveVideoMode(req port.VideoRequest) port.VideoMode {
+	hasFirst := strings.TrimSpace(req.FirstFrame) != ""
+	hasLast := strings.TrimSpace(req.LastFrame) != ""
+	hasRefs := len(filterNonEmptyURLs(req.ReferenceImages)) > 0
+	hasVideos := strings.TrimSpace(req.SourceVideo) != "" || len(filterNonEmptyURLs(req.ReferenceVideos)) > 0
 	switch {
-	case hasVideo && !hasFirst && !hasLast:
+	case hasVideos && !hasFirst && !hasLast:
 		return port.VideoModeV2V
 	case hasRefs && !hasFirst && !hasLast:
 		return port.VideoModeR2V
@@ -65,6 +49,7 @@ func inferVideoMode(firstFrame, lastFrame string, refImages, refVideos []string,
 
 // ParseVideoRequest normalizes a Film / HTTP video body into port.VideoRequest.
 // Staged asset ids (source_asset_id, reference_asset_ids, …) are preferred over aliases.
+// Task kind is the filled role set — body.mode is ignored.
 func ParseVideoRequest(body map[string]any) (port.VideoRequest, error) {
 	if body == nil {
 		return port.VideoRequest{}, fmt.Errorf("video body is required")
@@ -107,33 +92,10 @@ func ParseVideoRequest(body map[string]any) (port.VideoRequest, error) {
 		refVideos = out
 	}
 
-	explicit := videoModeFromBody(body)
-	mode := explicit
-	if mode == "" {
-		mode = inferVideoMode(firstFrame, lastFrame, refImages, refVideos, sourceVideo)
-	}
-	// Explicit mode selects the legal media group. Film may still attach a keyframe
-	// source alongside reference_r2v; drop the conflicting slots rather than 400.
-	if explicit != "" {
-		switch mode {
-		case port.VideoModeR2V, port.VideoModeV2V:
-			firstFrame, lastFrame = "", ""
-		case port.VideoModeI2V:
-			lastFrame = ""
-			refImages, refVideos, sourceVideo = nil, nil, ""
-		case port.VideoModeFLF:
-			refImages, refVideos, sourceVideo = nil, nil, ""
-		case port.VideoModeT2V:
-			firstFrame, lastFrame = "", ""
-			refImages, refVideos, sourceVideo = nil, nil, ""
-		}
-	}
-
 	req := port.VideoRequest{
 		Model:           strVal(body["model"]),
 		Prompt:          strVal(body["prompt"]),
 		NegativePrompt:  strVal(body["negative_prompt"]),
-		Mode:            mode,
 		DurationSec:     asFloat(body["duration"]),
 		Size:            strVal(body["size"]),
 		Resolution:      strVal(body["resolution"]),
@@ -154,63 +116,44 @@ func ParseVideoRequest(body map[string]any) (port.VideoRequest, error) {
 	return req, nil
 }
 
-// ValidateVideoRequest enforces exclusive media groups per mode (fail loud).
+// ValidateVideoRequest enforces exclusive media groups (fail loud, no silent drops).
+// Aligns with Make reject_video_roles: keyframes vs reference media vs source_video.
 func ValidateVideoRequest(req port.VideoRequest) error {
 	hasFirst := strings.TrimSpace(req.FirstFrame) != ""
 	hasLast := strings.TrimSpace(req.LastFrame) != ""
 	hasRefs := len(filterNonEmptyURLs(req.ReferenceImages)) > 0
 	hasVideos := strings.TrimSpace(req.SourceVideo) != "" || len(filterNonEmptyURLs(req.ReferenceVideos)) > 0
 
-	switch req.Mode {
-	case port.VideoModeT2V:
-		if hasFirst || hasLast || hasRefs || hasVideos {
-			return fmt.Errorf("video mode t2v must not include frame/reference media")
-		}
-		return nil
-	case port.VideoModeI2V:
-		if !hasFirst {
-			return fmt.Errorf("video mode i2v requires source_asset_id/first_frame")
-		}
-		if hasRefs || hasVideos {
-			return fmt.Errorf("video mode i2v cannot mix reference images/videos with first_frame")
-		}
-		return nil
-	case port.VideoModeFLF:
-		if !hasFirst || !hasLast {
-			return fmt.Errorf("video mode flf requires first_frame and last_frame")
-		}
-		if hasRefs || hasVideos {
-			return fmt.Errorf("video mode flf cannot mix reference images/videos with first/last frames")
-		}
-		return nil
-	case port.VideoModeR2V:
-		if !hasRefs {
-			return fmt.Errorf("video mode r2v requires reference_asset_ids")
-		}
-		if hasFirst || hasLast {
-			return fmt.Errorf("video mode r2v cannot mix first/last frames with reference images (mutually exclusive)")
-		}
-		return nil
-	case port.VideoModeV2V:
-		if !hasVideos {
-			return fmt.Errorf("video mode v2v requires source_video_asset_id or reference_video_asset_ids")
-		}
-		if hasFirst || hasLast {
-			return fmt.Errorf("video mode v2v cannot mix first/last frames with reference video (mutually exclusive)")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported video mode %q (want t2v|i2v|flf|r2v|v2v)", req.Mode)
+	if hasLast && !hasFirst {
+		return fmt.Errorf("last_frame requires first_frame / source_asset_id")
 	}
+	if (hasFirst || hasLast) && (hasRefs || hasVideos) {
+		return fmt.Errorf("first/last frames cannot be combined with reference images or videos (mutually exclusive)")
+	}
+	return nil
 }
 
-// NormalizeVideoBody ensures body["mode"] is set after ParseVideoRequest (for Make passthrough).
+// HasConditionedVideoMedia reports whether the request needs an edit/animate path
+// (Make: /api/videos/edits) rather than pure text generations.
+func HasConditionedVideoMedia(req port.VideoRequest) bool {
+	return strings.TrimSpace(req.FirstFrame) != "" ||
+		strings.TrimSpace(req.LastFrame) != "" ||
+		len(filterNonEmptyURLs(req.ReferenceImages)) > 0 ||
+		strings.TrimSpace(req.SourceVideo) != "" ||
+		len(filterNonEmptyURLs(req.ReferenceVideos)) > 0
+}
+
+// NormalizeVideoBody parses and returns a body suitable for Make passthrough.
+// Does not inject body.mode — Make derives task kind from media roles.
 func NormalizeVideoBody(body map[string]any) (map[string]any, port.VideoRequest, error) {
 	req, err := ParseVideoRequest(body)
 	if err != nil {
 		return nil, req, err
 	}
 	out := cloneMap(body)
-	out["mode"] = string(req.Mode)
+	delete(out, "mode")
+	delete(out, "film_protocol")
+	delete(out, "film_modes")
+	delete(out, "film_v2v_slot")
 	return out, req, nil
 }

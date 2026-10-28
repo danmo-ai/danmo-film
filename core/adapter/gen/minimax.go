@@ -226,7 +226,7 @@ func (p *MiniMaxProvider) submitVideo(ctx context.Context, body map[string]any) 
 		return nil, fmt.Errorf("minimax adapter only supports protocol minimax_h3_content (got %q for %s)", protocol, model)
 	}
 	if modes, ok := body["film_modes"].([]string); ok && len(modes) > 0 {
-		if err := AssertVideoModeSupported(map[string]any{"modes": modes}, req.Mode); err != nil {
+		if err := AssertVideoModeSupported(map[string]any{"modes": modes}, DeriveVideoMode(req)); err != nil {
 			return nil, err
 		}
 	}
@@ -253,7 +253,7 @@ func buildMiniMaxH3VideoPayload(model string, req port.VideoRequest, resolve fun
 	if req.Prompt != "" {
 		content = append(content, map[string]any{"type": "text", "text": req.Prompt})
 	}
-	switch req.Mode {
+	switch DeriveVideoMode(req) {
 	case port.VideoModeT2V:
 		// text only
 	case port.VideoModeI2V:
@@ -301,7 +301,7 @@ func buildMiniMaxH3VideoPayload(model string, req port.VideoRequest, resolve fun
 			return nil, fmt.Errorf("minimax v2v requires reference video")
 		}
 	default:
-		return nil, fmt.Errorf("minimax unsupported video mode %q", req.Mode)
+		return nil, fmt.Errorf("minimax unsupported media slot combination")
 	}
 	if len(content) == 0 {
 		return nil, fmt.Errorf("minimax video content empty")

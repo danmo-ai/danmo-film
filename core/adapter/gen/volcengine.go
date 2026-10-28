@@ -160,7 +160,7 @@ func (p *VolcengineProvider) submitVideo(ctx context.Context, body map[string]an
 	if req.Prompt != "" {
 		content = append(content, map[string]any{"type": "text", "text": req.Prompt})
 	}
-	switch req.Mode {
+	switch DeriveVideoMode(req) {
 	case port.VideoModeT2V:
 		// text only
 	case port.VideoModeI2V:
@@ -200,7 +200,7 @@ func (p *VolcengineProvider) submitVideo(ctx context.Context, body map[string]an
 			return nil, fmt.Errorf("volcengine v2v requires reference video")
 		}
 	default:
-		return nil, fmt.Errorf("volcengine unsupported video mode %q", req.Mode)
+		return nil, fmt.Errorf("volcengine unsupported media slot combination")
 	}
 	if len(content) == 0 {
 		return nil, fmt.Errorf("volcengine video content empty")

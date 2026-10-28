@@ -233,9 +233,9 @@ func (p *MakeProvider) CreateVideo(ctx context.Context, body map[string]any) (ma
 	if err != nil {
 		return nil, err
 	}
-	// Make animate/edits path for conditioned modes; generations for pure t2v.
+	// Make: generations for text-only; edits when first_frame / refs / video are present.
 	path := "/api/videos/generations"
-	if req.Mode != port.VideoModeT2V {
+	if HasConditionedVideoMedia(req) {
 		path = "/api/videos/edits"
 	}
 	m, _, _, err := p.doJSON(ctx, http.MethodPost, path, normalized)

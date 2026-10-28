@@ -35,6 +35,13 @@ func (a *App) submit(action string) gin.HandlerFunc {
 			fail(c, 400, err)
 			return
 		}
+		// Validate media role exclusivity before staging (fail loud, no silent drops).
+		if action == "video" || action == "video_edit" {
+			if _, err := genadapt.ParseVideoRequest(body); err != nil {
+				fail(c, 400, err)
+				return
+			}
+		}
 		staged, err := ingest.RewriteBodyAssetRefs(c.Request.Context(), body, gen, a.Assets)
 		if err != nil {
 			fail(c, 502, err)

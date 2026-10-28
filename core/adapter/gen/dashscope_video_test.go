@@ -13,7 +13,7 @@ func TestBuildDashVideoInputModes(t *testing.T) {
 	legacy := config.VideoProtocolDashImgURL
 
 	i2v, err := buildDashVideoInput("wan3.0-video", port.VideoRequest{
-		Mode: port.VideoModeI2V, Prompt: "p", FirstFrame: "first",
+		Prompt: "p", FirstFrame: "first",
 	}, media, "")
 	if err != nil {
 		t.Fatal(err)
@@ -24,7 +24,7 @@ func TestBuildDashVideoInputModes(t *testing.T) {
 	}
 
 	flf, err := buildDashVideoInput("wan3.0-video", port.VideoRequest{
-		Mode: port.VideoModeFLF, FirstFrame: "a", LastFrame: "b",
+		FirstFrame: "a", LastFrame: "b",
 	}, media, "")
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestBuildDashVideoInputModes(t *testing.T) {
 	}
 
 	r2v, err := buildDashVideoInput("wan3.0-video", port.VideoRequest{
-		Mode: port.VideoModeR2V, ReferenceImages: []string{"r1", "r2"},
+		ReferenceImages: []string{"r1", "r2"},
 	}, media, "")
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestBuildDashVideoInputModes(t *testing.T) {
 	}
 
 	v2v, err := buildDashVideoInput("wan3.0-video", port.VideoRequest{
-		Mode: port.VideoModeV2V, ReferenceVideos: []string{"vid"},
+		ReferenceVideos: []string{"vid"},
 	}, media, "")
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestBuildDashVideoInputModes(t *testing.T) {
 	}
 
 	clip, err := buildDashVideoInput("wan2.7-i2v", port.VideoRequest{
-		Mode: port.VideoModeV2V, ReferenceVideos: []string{"vid"},
+		ReferenceVideos: []string{"vid"},
 	}, media, "first_clip")
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestBuildDashVideoInputModes(t *testing.T) {
 	}
 
 	imgURL, err := buildDashVideoInput("wan2.6-i2v", port.VideoRequest{
-		Mode: port.VideoModeI2V, FirstFrame: "https://x/a.png",
+		FirstFrame: "https://x/a.png",
 	}, legacy, "")
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestBuildDashVideoInputModes(t *testing.T) {
 	}
 
 	_, err = buildDashVideoInput("wan2.6-i2v", port.VideoRequest{
-		Mode: port.VideoModeR2V, ReferenceImages: []string{"r"},
+		ReferenceImages: []string{"r"},
 	}, legacy, "")
 	if err == nil || !strings.Contains(err.Error(), "dashscope_media") {
 		t.Fatalf("expected protocol error, got %v", err)

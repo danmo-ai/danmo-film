@@ -442,6 +442,7 @@ func buildDashV2VMedia(videos, images []string, v2vSlot string) []map[string]any
 
 // buildDashVideoInput maps a normalized VideoRequest onto DashScope input.
 // protocol / v2vSlot come from providers.video_model_params (not model-id heuristics).
+// Task kind is derived from filled media slots.
 func buildDashVideoInput(model string, req port.VideoRequest, protocol, v2vSlot string) (map[string]any, error) {
 	_ = model
 	input := map[string]any{}
@@ -451,10 +452,11 @@ func buildDashVideoInput(model string, req port.VideoRequest, protocol, v2vSlot 
 	if np := strings.TrimSpace(req.NegativePrompt); np != "" {
 		input["negative_prompt"] = np
 	}
+	kind := DeriveVideoMode(req)
 
 	switch protocol {
 	case "", "dashscope_img_url":
-		switch req.Mode {
+		switch kind {
 		case port.VideoModeT2V:
 			return input, nil
 		case port.VideoModeI2V, port.VideoModeFLF:
@@ -464,11 +466,11 @@ func buildDashVideoInput(model string, req port.VideoRequest, protocol, v2vSlot 
 			input["img_url"] = req.FirstFrame
 			return input, nil
 		default:
-			return nil, fmt.Errorf("dashscope protocol %q does not support mode %s (configure video_model_params.protocol=dashscope_media)", protocol, req.Mode)
+			return nil, fmt.Errorf("dashscope protocol %q does not support slot combination %s (configure video_model_params.protocol=dashscope_media)", protocol, kind)
 		}
 
 	case "dashscope_media":
-		switch req.Mode {
+		switch kind {
 		case port.VideoModeT2V:
 			return input, nil
 		case port.VideoModeI2V:
@@ -514,7 +516,7 @@ func buildDashVideoInput(model string, req port.VideoRequest, protocol, v2vSlot 
 			input["media"] = buildDashV2VMedia(videos, filterNonEmptyURLs(req.ReferenceImages), v2vSlot)
 			return input, nil
 		default:
-			return nil, fmt.Errorf("dashscope unsupported video mode %q", req.Mode)
+			return nil, fmt.Errorf("dashscope unsupported media slot combination %q", kind)
 		}
 
 	default:

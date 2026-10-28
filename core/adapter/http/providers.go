@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	genadapt "github.com/danmo-ai/danmo-film/core/adapter/gen"
 	"github.com/danmo-ai/danmo-film/core/service/ingest"
 )
 
@@ -52,6 +53,12 @@ func (a *App) proxy(action string) gin.HandlerFunc {
 		if err != nil {
 			fail(c, 400, err)
 			return
+		}
+		if action == "video" || action == "video_edit" {
+			if _, err := genadapt.ParseVideoRequest(body); err != nil {
+				fail(c, 400, err)
+				return
+			}
 		}
 		staged, err := ingest.RewriteBodyAssetRefs(c.Request.Context(), body, gen, a.Assets)
 		if err != nil {

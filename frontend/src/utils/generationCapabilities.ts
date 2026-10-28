@@ -9,7 +9,7 @@ export type GenerationCapabilityMode =
   | 'video_reference_r2v'
   | 'video_reference_v2v';
 
-/** Canonical Film video generation modes (port.VideoMode). */
+/** Capability catalog tokens derived from filled media slots (not an HTTP body field). */
 export type VideoGenerationMode = 't2v' | 'i2v' | 'flf' | 'r2v' | 'v2v';
 
 export interface ModelGenerationCapabilities {
@@ -63,7 +63,7 @@ export function modelGenerationCapabilities(
   };
 }
 
-/** Map long-video chain_mode → port video mode for /api/videos/*. */
+/** Map long-video chain_mode → capability catalog token (for modes[] checks). */
 export function chainModeToVideoMode(chainMode: LongVideoChainMode): VideoGenerationMode {
   switch (chainMode) {
     case 'reference_r2v':

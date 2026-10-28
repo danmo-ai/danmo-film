@@ -561,7 +561,6 @@ import {
   assertProviderSupports,
   capReferenceAssetIds,
   chainModeToCapabilityMode,
-  chainModeToVideoMode,
   validateReferenceRequirement,
 } from '@/utils/generationCapabilities';
 import {
@@ -3904,11 +3903,13 @@ function buildSegmentSubmitBody(
   const cappedDurationSec = Math.min(shotDurationSec(shot), MAX_SHOT_DURATION_SEC);
   const numFrames = numFramesForDurationSec(cappedDurationSec, fps, nfSchema);
   const { width, height } = outputSizePixels.value;
-  const videoMode = chainModeToVideoMode(chainMode);
   const segLocale = uiLocale.value.startsWith('zh') ? 'zh' : 'en';
   const identitySegBindings = segRefBindings.filter((b) => b.purpose === 'identity');
-  const sendSegRefs = modelHasBerniniRenderer(segModel) || chainMode === 'reference_r2v';
-  const { ids: cappedSegRefs } = sendSegRefs
+  // Media roles are exclusive: r2v sends refs only; i2v/flf send first(/last) frame only.
+  // Bernini may still use identity bindings in the prompt text without attaching ref media.
+  const sendSegRefMedia = chainMode === 'reference_r2v';
+  const promptRefBindings = sendSegRefMedia || modelHasBerniniRenderer(segModel);
+  const { ids: cappedSegRefs } = promptRefBindings
     ? capReferenceAssetIds(
         identitySegBindings.map((b) => b.asset_id),
         segModelRow,
@@ -3917,17 +3918,13 @@ function buildSegmentSubmitBody(
   const motion = enhanceSegmentVideoPrompt(motionRaw, {
     locale: segLocale,
     chainMode,
-    referenceBindings: sendSegRefs
+    referenceBindings: promptRefBindings
       ? orderBindingsByAssetIds(identitySegBindings, cappedSegRefs)
       : [],
   });
   const body: Record<string, unknown> = {
     model: segModel,
-    mode: videoMode,
     operation: 'animate',
-    // i2v/flf use source as first frame; r2v still may include keyframe for UI
-    // readiness — adapter drops it when mode=r2v (mutually exclusive with refs).
-    source_asset_id: sourceAssetId,
     prompt: motion,
     negative_prompt: p.negative_prompt || '',
     size: `${width}x${height}`,
@@ -3943,7 +3940,6 @@ function buildSegmentSubmitBody(
       long_video_shot_id: shot.id,
       long_video_phase: 'segment',
       long_video_chain_mode: chainMode,
-      video_mode: videoMode,
       ...(segRefBindings.length
         ? { long_video_reference_bindings: serializeReferenceBindings(segRefBindings) }
         : {}),
@@ -3956,15 +3952,14 @@ function buildSegmentSubmitBody(
   if (adapters.length > 0) {
     body.adapters = adapters;
   }
-  if (chainMode === 'first_last' && endFrameId) {
-    body.tail_asset_id = endFrameId;
-    body.end_asset_id = endFrameId;
-  }
-  if (sendSegRefs) {
-    if (cappedSegRefs.length) {
-      body.reference_asset_ids = cappedSegRefs;
-    } else if (chainMode === 'reference_r2v') {
-      return null;
+  if (sendSegRefMedia) {
+    if (!cappedSegRefs.length) return null;
+    body.reference_asset_ids = cappedSegRefs;
+  } else {
+    body.source_asset_id = sourceAssetId;
+    if (chainMode === 'first_last' && endFrameId) {
+      body.tail_asset_id = endFrameId;
+      body.end_asset_id = endFrameId;
     }
   }
   appendActiveEnumFields(

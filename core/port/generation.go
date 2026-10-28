@@ -13,13 +13,13 @@ type Model struct {
 	ID     string         `json:"id"`
 	Media  string         `json:"media,omitempty"`
 	Label  string         `json:"label,omitempty"`
-	Modes  []string       `json:"modes,omitempty"` // t2v, i2v, flf, r2v, v2v
+	Modes  []string       `json:"modes,omitempty"` // capability catalog: t2v, i2v, flf, r2v, v2v
 	MaxSec float64        `json:"max_duration_sec,omitempty"`
 	Sizes  []string       `json:"sizes,omitempty"`
 	Extra  map[string]any `json:"extra,omitempty"`
 }
 
-// ImageMode is Film's canonical image-generation task kind (parallel to VideoMode).
+// ImageMode is Film's canonical image-generation task kind.
 type ImageMode string
 
 const (
@@ -30,20 +30,20 @@ const (
 )
 
 type ImageRequest struct {
-	Model            string
-	Prompt           string
-	NegativePrompt   string
-	Mode             ImageMode
-	Size             string
-	Seed             int
-	SourceID         string   // primary image for edit / inpaint / single-ref i2i
-	MaskID           string   // inpaint
-	ReferenceImages  []string // i2i multi-ref
-	Raw              map[string]any
+	Model           string
+	Prompt          string
+	NegativePrompt  string
+	Mode            ImageMode
+	Size            string
+	Seed            int
+	SourceID        string   // primary image for edit / inpaint / single-ref i2i
+	MaskID          string   // inpaint
+	ReferenceImages []string // i2i multi-ref
+	Raw             map[string]any
 }
 
-// VideoMode is Film's canonical video-generation task kind.
-// One CreateVideo entry; mode selects which media slots are legal.
+// VideoMode is a capability catalog token derived from filled media slots.
+// It is not an HTTP request field — task kind is the role set on VideoRequest.
 // Do not merge r2v into t2v — reference images are a distinct exclusive group
 // from first/last frames (Wan 3 / Seedance mutual exclusion).
 type VideoMode string
@@ -56,11 +56,12 @@ const (
 	VideoModeV2V VideoMode = "v2v" // reference / continuation video
 )
 
+// VideoRequest is Film's canonical video job. Task kind is which slots are filled
+// (first/last frames vs reference images/videos). Slots are mutually exclusive groups.
 type VideoRequest struct {
 	Model             string
 	Prompt            string
 	NegativePrompt    string
-	Mode              VideoMode
 	DurationSec       float64
 	Size              string
 	Resolution        string
@@ -70,8 +71,8 @@ type VideoRequest struct {
 	Seed              int
 	FirstFrame        string   // staged id / URL / data URI
 	LastFrame         string
-	ReferenceImages   []string // r2v (and multimodal reference alongside v2v on some vendors)
-	ReferenceVideos   []string // v2v / multimodal reference
+	ReferenceImages   []string // reference images (exclusive vs first/last)
+	ReferenceVideos   []string // reference / continuation videos
 	SourceVideo       string   // primary clip for continuation (alias of first reference video)
 	Raw               map[string]any
 }
@@ -99,8 +100,8 @@ type SSEEvent struct {
 }
 
 // GenerationProvider is Film's canonical image/video job API.
-// Video: prefer CreateVideo with explicit body.mode (t2v|i2v|flf|r2v|v2v).
-// EditVideo remains for true edit ops / backward compat and must honor the same mode field.
+// Video: CreateVideo / EditVideo take filled media slots (no body.mode).
+// Task kind is derived from the role set; model capability lives in modes[].
 type GenerationProvider interface {
 	ID() string
 	Health(ctx context.Context) (map[string]any, error)

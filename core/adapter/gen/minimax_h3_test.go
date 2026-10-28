@@ -11,7 +11,7 @@ func TestBuildMiniMaxH3VideoPayloadModes(t *testing.T) {
 	resolve := func(s string) string { return "data:image/png;base64," + s }
 
 	t2v, err := buildMiniMaxH3VideoPayload("MiniMax-H3", port.VideoRequest{
-		Mode: port.VideoModeT2V, Prompt: "dance",
+		Prompt: "dance",
 	}, resolve)
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestBuildMiniMaxH3VideoPayloadModes(t *testing.T) {
 	}
 
 	i2v, err := buildMiniMaxH3VideoPayload("MiniMax-H3", port.VideoRequest{
-		Mode: port.VideoModeI2V, Prompt: "p", FirstFrame: "f1",
+		Prompt: "p", FirstFrame: "f1",
 	}, resolve)
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +33,7 @@ func TestBuildMiniMaxH3VideoPayloadModes(t *testing.T) {
 	}
 
 	r2v, err := buildMiniMaxH3VideoPayload("MiniMax-H3", port.VideoRequest{
-		Mode: port.VideoModeR2V, Prompt: "p", ReferenceImages: []string{"a", "b"},
+		Prompt: "p", ReferenceImages: []string{"a", "b"},
 	}, resolve)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestBuildMiniMaxH3VideoPayloadModes(t *testing.T) {
 	}
 
 	v2v, err := buildMiniMaxH3VideoPayload("MiniMax-H3", port.VideoRequest{
-		Mode: port.VideoModeV2V, Prompt: "p", ReferenceVideos: []string{"vid"},
+		Prompt: "p", ReferenceVideos: []string{"vid"},
 	}, resolve)
 	if err != nil {
 		t.Fatal(err)

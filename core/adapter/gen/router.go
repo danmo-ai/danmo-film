@@ -487,7 +487,7 @@ func (r *Router) dispatchVideo(
 	vidParams := config.ResolveVideoModelParams(settings, bare)
 	req, perr := ParseVideoRequest(cp)
 	if perr == nil {
-		if err := vidParams.AssertSupportsVideoMode(string(req.Mode)); err != nil {
+		if err := vidParams.AssertSupportsVideoMode(string(DeriveVideoMode(req))); err != nil {
 			return nil, err
 		}
 	}
